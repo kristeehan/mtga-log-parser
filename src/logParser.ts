@@ -17,7 +17,7 @@ export interface ParseConfig {
    * Mac:     ~/Library/Application Support/com.wizards.mtga/Downloads/Raw/Raw_CardDatabase_*.mtga
    * Windows: %APPDATA%\..\LocalLow\Wizards Of The Coast\MTGA\Downloads\Raw\Raw_CardDatabase_*.mtga
    */
-  resolveColors?: (grpIds: number[]) => string;
+  resolveColors?: (grpIds: number[]) => Promise<string>;
 }
 
 export interface CardEntry {
@@ -475,7 +475,7 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
   for (const [matchId, grpSet] of opponentGrpIds.entries()) {
     const existing = matchMap.get(matchId);
     if (!existing) continue;
-    const colors = config.resolveColors?.(Array.from(grpSet)) ?? '';
+    const colors = (await config.resolveColors?.(Array.from(grpSet))) ?? '';
     if (colors) matchMap.set(matchId, { ...existing, opponentColors: colors });
   }
 
