@@ -1,6 +1,6 @@
 # mtga-log-parser
 
-Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, and per-turn board state records. Designed for Best-of-3 constructed formats (Ranked, Bo3 Play, seasonal events). No manual input required — match results, play/draw, deck names, and opponent card colors are all auto-detected from the log.
+Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, and per-turn board state records. Supports all formats — Ranked, Bo1, Bo3, limited, bot matches. No manual input required — match results, play/draw, deck names, and opponent card colors are all auto-detected from the log.
 
 ## Installation
 
@@ -30,6 +30,34 @@ for (const match of matches) {
   console.log(match.timestamp, match.myDeck, match.matchResult);
 }
 ```
+
+By default all formats are returned. Use `matchFilter` to restrict to a specific queue:
+
+```ts
+import { parseAllLogs, MatchFilters } from 'mtga-log-parser';
+
+// Bo3 constructed only (Ranked, seasonal events, Bo3 Play)
+const matches = await parseAllLogs({
+  logDir: '...',
+  matchFilter: MatchFilters.bo3Constructed,
+});
+```
+
+## `MatchFilters` presets
+
+| Preset | Includes |
+|---|---|
+| `MatchFilters.all` | Every match (default) |
+| `MatchFilters.bo3Constructed` | `Traditional_*` and `Constructed_BestOf3` only |
+| `MatchFilters.constructed` | All constructed formats — excludes draft, sealed, and jump-in |
+
+You can also pass a custom predicate:
+
+```ts
+matchFilter: (eventId) => eventId.startsWith('Traditional_'),
+```
+
+The `eventId` value is the raw MTGA event string from `reservedPlayers[].eventId` in the log.
 
 ## With color resolution
 
@@ -79,7 +107,7 @@ import { parseAllLogsWithDebug } from 'mtga-log-parser';
 
 const result = await parseAllLogsWithDebug({ logDir: '...' });
 
-result.matches;          // Match[] — only completed Bo3 matches
+result.matches;          // Match[] — completed matches (all formats by default)
 result.gameSnapshots;    // GameSnapshot[] — one per game (life totals, mulligans, turn count)
 result.boardSnapshots;   // TurnSnapshot[] — per-phase board state for every turn
 result.myDeckListMap;       // Map<matchId, DeckList> — grpId card lists
@@ -93,7 +121,12 @@ result.boardStateCollector; // BoardStateCollector — call .rawState(matchId, g
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `logDir` | `string` | Yes | Directory containing `UTC_Log - *.log` files |
+| `matchFilter` | `(eventId: string) => boolean` | No | Predicate to restrict which matches are included. Defaults to `MatchFilters.all`. Use `MatchFilters.bo3Constructed` to replicate pre-2.0 behavior. |
 | `resolveColors` | `(grpIds: number[]) => Promise<string>` | No | Async callback to derive opponent color string (e.g. `"WU"`) from card grpIds. If omitted, `match.opponentColors` will be `""`. |
+
+## Migrating from 1.x
+
+Version 2.0 is format-agnostic by default. If you were relying on the implicit Bo3-only filter, add `matchFilter: MatchFilters.bo3Constructed` to your config to restore the previous behavior.
 
 ## ESM only
 
