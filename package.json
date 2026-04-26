@@ -1,0 +1,26 @@
+{
+  "name": "mtga-log-parser",
+  "version": "0.1.0",
+  "description": "Parse MTGA (Magic: The Gathering Arena) log files into structured match, game snapshot, and board state data.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["mtga", "magic-the-gathering", "arena", "log-parser"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.0"
+  }
+}

@@ -1,0 +1,154 @@
+import type { GameSnapshot } from './types/gameData.js';
+
+// Per-game mutable state accumulated before we see GameStage_GameOver
+interface SnapshotBuilder {
+  myMulligan: number;
+  oppMulligan: number;
+  // Last life totals seen in any non-GameOver message, used as fallback when
+  // GameStage_GameOver omits lifeTotal (common on life-total deaths).
+  lastMyLife: number | null;
+  lastOppLife: number | null;
+}
+
+function gameKey(matchId: string, gameNumber: number): string {
+  return `${matchId}:${gameNumber}`;
+}
+
+function parseEndReason(reason: string): GameSnapshot['gameEndReason'] {
+  if (reason === 'ResultReason_Concede') return 'concede';
+  if (reason === 'ResultReason_Life') return 'life';
+  if (reason === 'ResultReason_Timeout') return 'timeout';
+  if (reason === 'ResultReason_Draw') return 'draw';
+  return 'unknown';
+}
+
+export interface GameDataCollector {
+  // Call this for every parsed GRE greToClientEvent object that contains GameStateMessages
+  collect(
+    obj: Record<string, unknown>,
+    currentMatchId: string | null,
+    localTeamIdMap: Map<string, number>,
+  ): void;
+  snapshots(): GameSnapshot[];
+}
+
+export function createGameDataCollector(): GameDataCollector {
+  const builders = new Map<string, SnapshotBuilder>();
+  const completed: GameSnapshot[] = [];
+  // Track current game number: updated whenever we see gameInfo.gameNumber
+  // Keyed by matchId so games from different matches don't bleed into each other
+  const currentGameNumbers = new Map<string, number>();
+  // Persist local seat ID across messages — GameStage_GameOver may not carry systemSeatIds
+  const localSeatIds = new Map<string, number>();
+
+  function getBuilder(matchId: string, gameNumber: number): SnapshotBuilder {
+    const key = gameKey(matchId, gameNumber);
+    if (!builders.has(key)) builders.set(key, { myMulligan: 0, oppMulligan: 0, lastMyLife: null, lastOppLife: null });
+    return builders.get(key)!;
+  }
+
+  function collect(
+    obj: Record<string, unknown>,
+    currentMatchId: string | null,
+    localTeamIdMap: Map<string, number>,
+  ): void {
+    if (!currentMatchId) return;
+
+    const gteEvent = obj['greToClientEvent'] as Record<string, unknown> | undefined;
+    if (!gteEvent) return;
+    const messages = gteEvent['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
+    if (!messages) return;
+
+    for (const msg of messages) {
+      if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
+
+      // Persist local seat ID — GameStage_GameOver messages may omit systemSeatIds
+      const seatIds = msg['systemSeatIds'] as number[] | undefined;
+      const msgSeatId = typeof seatIds?.[0] === 'number' ? seatIds[0] : undefined;
+      if (msgSeatId !== undefined) localSeatIds.set(currentMatchId, msgSeatId);
+      const localSeatId = localSeatIds.get(currentMatchId);
+      if (localSeatId === undefined) continue;
+
+      const gsm = msg['gameStateMessage'] as Record<string, unknown> | undefined;
+      if (!gsm) continue;
+
+      const gameInfo = gsm['gameInfo'] as Record<string, unknown> | undefined;
+
+      // Update tracked game number whenever we see it in a message
+      const gameNumberRaw = gameInfo?.['gameNumber'];
+      if (typeof gameNumberRaw === 'number') {
+        currentGameNumbers.set(currentMatchId, gameNumberRaw);
+      }
+
+      const currentGameNumber = currentGameNumbers.get(currentMatchId);
+      if (typeof currentGameNumber !== 'number') continue;
+
+      const players = gsm['players'] as Array<Record<string, unknown>> | undefined;
+
+      // Mulligan tracking + life total tracking. Life totals here serve as fallback for
+      // the GameStage_GameOver handler, which sometimes omits lifeTotal on death events.
+      // Only track positive values — a 0/negative reading would be the death itself.
+      const builder = getBuilder(currentMatchId, currentGameNumber);
+      if (players) {
+        for (const p of players) {
+          const seat = p['systemSeatNumber'];
+          const mc = p['mulliganCount'];
+          if (typeof mc === 'number') {
+            if (seat === localSeatId) builder.myMulligan = Math.max(builder.myMulligan, mc);
+            else builder.oppMulligan = Math.max(builder.oppMulligan, mc);
+          }
+          const life = p['lifeTotal'];
+          if (typeof life === 'number' && life > 0) {
+            if (seat === localSeatId) builder.lastMyLife = life;
+            else builder.lastOppLife = life;
+          }
+        }
+      }
+
+      // Game end: capture final life, turn count, and end reason
+      if (gameInfo?.['stage'] !== 'GameStage_GameOver') continue;
+      if (!players || players.length === 0) continue;
+
+      const gameNumber = currentGameNumber as 1 | 2 | 3;
+
+      // results[] is cumulative across all games; index [gameNumber-1] is this game's result
+      const results = gameInfo['results'] as Array<Record<string, unknown>> | undefined;
+      const gameResults = results?.filter((r) => r['scope'] === 'MatchScope_Game') ?? [];
+      const thisGameResult = gameResults[gameNumber - 1];
+      const endReason = thisGameResult
+        ? parseEndReason(thisGameResult['reason'] as string)
+        : 'unknown';
+
+      const myPlayer = players.find((p) => p['systemSeatNumber'] === localSeatId);
+      const oppPlayer = players.find((p) => p['systemSeatNumber'] !== localSeatId);
+
+      const myFinalLife = typeof myPlayer?.['lifeTotal'] === 'number'
+        ? (myPlayer['lifeTotal'] as number)
+        : (builder.lastMyLife ?? 20);
+      const oppFinalLife = typeof oppPlayer?.['lifeTotal'] === 'number'
+        ? (oppPlayer['lifeTotal'] as number)
+        : (builder.lastOppLife ?? 20);
+
+      const myTurns = typeof myPlayer?.['turnNumber'] === 'number' ? (myPlayer['turnNumber'] as number) : 0;
+      const oppTurns = typeof oppPlayer?.['turnNumber'] === 'number' ? (oppPlayer['turnNumber'] as number) : 0;
+      const turnCount = Math.max(myTurns, oppTurns);
+
+      completed.push({
+        matchId: currentMatchId,
+        gameNumber,
+        myMulliganCount: builder.myMulligan,
+        opponentMulliganCount: builder.oppMulligan,
+        myFinalLife,
+        opponentFinalLife: oppFinalLife,
+        turnCount,
+        gameEndReason: endReason,
+      });
+
+      // Suppress unused parameter warning — localTeamIdMap is accepted for API compatibility
+      // but game data parsing uses localSeatId (from systemSeatIds) rather than teamId.
+      void localTeamIdMap;
+    }
+  }
+
+  return { collect, snapshots: () => completed };
+}
