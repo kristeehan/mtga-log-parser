@@ -82,9 +82,10 @@ const result = await parseAllLogsWithDebug({ logDir: '...' });
 result.matches;          // Match[] — only completed Bo3 matches
 result.gameSnapshots;    // GameSnapshot[] — one per game (life totals, mulligans, turn count)
 result.boardSnapshots;   // TurnSnapshot[] — per-phase board state for every turn
-result.myDeckListMap;    // Map<matchId, DeckList> — grpId card lists
-result.deckUsages;       // Map<deckName, { deck, timestamp }> — most recent list per deck name
-result.opponentGrpIds;   // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
+result.myDeckListMap;       // Map<matchId, DeckList> — grpId card lists
+result.deckUsages;          // Map<deckName, { deck, timestamp }> — most recent list per deck name
+result.opponentGrpIds;      // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
+result.boardStateCollector; // BoardStateCollector — call .rawState(matchId, gameNum) for raw zone/object debug data
 ```
 
 ## `ParseConfig` reference

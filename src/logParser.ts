@@ -4,7 +4,7 @@ import type { Match, GameResult, MatchResult } from './types/match.js';
 import type { GameSnapshot } from './types/gameData.js';
 import type { TurnSnapshot } from './types/boardState.js';
 import { createGameDataCollector } from './gameDataParser.js';
-import { createBoardStateCollector } from './boardStateParser.js';
+import { createBoardStateCollector, type BoardStateCollector } from './boardStateParser.js';
 
 export interface ParseConfig {
   /** Directory containing "UTC_Log - *.log" files */
@@ -36,7 +36,7 @@ export interface ParseResult {
   gameSnapshots: GameSnapshot[];
   boardSnapshots: TurnSnapshot[];
   myDeckListMap: Map<string, DeckList>;
-  boardStateCollector: ReturnType<typeof createBoardStateCollector>;
+  boardStateCollector: BoardStateCollector;
   deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
 }
 
@@ -471,13 +471,15 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
     parseLines(text.split('\n'), matchMap, localTeamIdMap, opponentGrpIds, myDeckListMap, state, gameDataCollector, boardStateCollector);
   }
 
-  // Derive opponent colors from collected grpIds via optional callback
-  for (const [matchId, grpSet] of opponentGrpIds.entries()) {
-    const existing = matchMap.get(matchId);
-    if (!existing) continue;
-    const colors = (await config.resolveColors?.(Array.from(grpSet))) ?? '';
-    if (colors) matchMap.set(matchId, { ...existing, opponentColors: colors });
-  }
+  // Derive opponent colors from collected grpIds via optional callback — resolved in parallel
+  await Promise.all(
+    Array.from(opponentGrpIds.entries()).map(async ([matchId, grpSet]) => {
+      const existing = matchMap.get(matchId);
+      if (!existing) return;
+      const colors = (await config.resolveColors?.(Array.from(grpSet))) ?? '';
+      if (colors) matchMap.set(matchId, { ...existing, opponentColors: colors });
+    }),
+  );
 
   const matches = Array.from(matchMap.values()).filter((m) => m.matchResult !== null);
 
