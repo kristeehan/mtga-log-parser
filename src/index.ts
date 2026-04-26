@@ -1,7 +1,7 @@
 // Main entry point — re-exports all public API surface
 
 // Core parse functions
-export { parseAllLogs, parseAllLogsWithDebug } from './logParser.js';
+export { parseAllLogs, parseAllLogsWithDebug, MatchFilters } from './logParser.js';
 
 // Sub-collector factories
 export { createGameDataCollector } from './gameDataParser.js';

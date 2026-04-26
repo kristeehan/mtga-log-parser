@@ -10,6 +10,15 @@ export interface ParseConfig {
   /** Directory containing "UTC_Log - *.log" files */
   logDir: string;
   /**
+   * Filter which matches to include. Receives the raw MTGA eventId string
+   * from reservedPlayers[].eventId. Called once per player; a match is
+   * included only if ALL players pass the filter.
+   *
+   * Defaults to () => true (all matches).
+   * Use MatchFilters helpers for common presets.
+   */
+  matchFilter?: (eventId: string) => boolean;
+  /**
    * Optional callback to resolve opponent colors from card grpIds.
    * If omitted, match.opponentColors will be an empty string.
    *
@@ -19,6 +28,19 @@ export interface ParseConfig {
    */
   resolveColors?: (grpIds: number[]) => Promise<string>;
 }
+
+export const MatchFilters = {
+  /** Traditional_ prefix (ranked + seasonal events) and Constructed_BestOf3 only */
+  bo3Constructed: (eventId: string): boolean =>
+    eventId.startsWith('Traditional_') || eventId === 'Constructed_BestOf3',
+
+  /** All constructed formats — excludes draft, sealed, and jump-in */
+  constructed: (eventId: string): boolean =>
+    Boolean(eventId) && !/(Draft|Sealed|Jump_?In)/i.test(eventId),
+
+  /** All matches — the default when matchFilter is omitted */
+  all: (): boolean => true,
+} as const;
 
 export interface CardEntry {
   cardId: number;
@@ -128,6 +150,7 @@ function handleMatchStart(
   myDeckListMap: Map<string, DeckList>,
   pendingDeckList: DeckList,
   deckByEvent: Map<string, { name: string; deck: DeckList }>,
+  matchFilter: (eventId: string) => boolean,
 ): void {
   const config = gameRoomInfo['gameRoomConfig'] as Record<string, unknown> | undefined;
   if (!config) return;
@@ -138,18 +161,11 @@ function handleMatchStart(
   const players = config['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
   if (!players || players.length < 2) return;
 
-  // Accept all Traditional (Bo3) constructed event formats.
-  // Traditional_Ladder = ranked, Traditional_Cons_Event_* = season events, Constructed_BestOf3 = open play BO3.
-  // Exclude casual Play, AIBotMatch, and limited formats.
-  function isBo3Constructed(eventId: unknown): boolean {
-    if (typeof eventId !== 'string') return false;
-    return (
-      eventId.startsWith('Traditional_') ||
-      eventId === 'Constructed_BestOf3'
-    );
-  }
-  const allBo3 = players.every((p) => isBo3Constructed(p['eventId']));
-  if (!allBo3) return;
+  const allPass = players.every((p) => {
+    const eventId = p['eventId'];
+    return typeof eventId === 'string' && matchFilter(eventId);
+  });
+  if (!allPass) return;
 
   // Local player: Mac platform → systemSeatId 1 → players[0]
   let localPlayer = players.find((p) => p['platformId'] === 'Mac');
@@ -171,6 +187,9 @@ function handleMatchStart(
   const eventLabel = rawEventId === 'Traditional_Ladder' ? 'Ranked'
     : rawEventId.startsWith('Traditional_') ? rawEventId.replace(/^Traditional_/, '').replace(/_/g, ' ')
     : rawEventId === 'Constructed_BestOf3' ? 'Bo3 Play'
+    : rawEventId === 'Play' ? 'Bo1 Play'
+    : rawEventId === 'PlayRanked' ? 'Bo1 Ranked'
+    : rawEventId === 'AIBotMatch' ? 'Bot Match'
     : rawEventId;
 
   // Prefer per-event deck lookup (from Courses dump or individual EventSetDeckV2).
@@ -314,12 +333,6 @@ function tryExtractGameState(
   }
 }
 
-// True for any format where the player builds their own deck.
-// Excludes draft, sealed, and jump-in where you use a drafted/opened card pool.
-function isConstructedEvent(eventId: string): boolean {
-  return Boolean(eventId) && !/(Draft|Sealed|Jump_?In)/i.test(eventId);
-}
-
 function parseLines(
   lines: string[],
   matchMap: Map<string, Match>,
@@ -336,6 +349,7 @@ function parseLines(
   },
   gameDataCollector: ReturnType<typeof createGameDataCollector>,
   boardStateCollector: ReturnType<typeof createBoardStateCollector>,
+  matchFilter: (eventId: string) => boolean,
 ): void {
   for (const line of lines) {
     // Deck name + card list detection: EventSetDeckV2 response or CourseDeckSummary
@@ -397,26 +411,22 @@ function parseLines(
           const stateType = (event['stateType'] ?? gameRoomInfo?.['stateType']) as string | undefined;
 
           if (stateType === 'MatchGameRoomStateType_Playing' && gameRoomInfo) {
-            handleMatchStart(raw, gameRoomInfo, matchMap, localTeamIdMap, state.pendingDeckName, myDeckListMap, state.pendingDeckList, state.deckByEvent);
+            handleMatchStart(raw, gameRoomInfo, matchMap, localTeamIdMap, state.pendingDeckName, myDeckListMap, state.pendingDeckList, state.deckByEvent, matchFilter);
             // Track current match for GRE message association
             const config = gameRoomInfo['gameRoomConfig'] as Record<string, unknown> | undefined;
             const matchId = config?.['matchId'] as string | undefined;
             if (matchId) state.currentMatchId = matchId;
 
-            // Track deck usage for ALL constructed formats (not just Bo3) so the Decks tab
-            // shows decks played in Bo1, bot matches, etc. Match recording is unaffected.
             const players = config?.['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
             const rawEventId = (players?.[0]?.['eventId'] as string) ?? '';
-            if (isConstructedEvent(rawEventId)) {
-              const ts = typeof raw['timestamp'] === 'string' ? parseInt(raw['timestamp'], 10) : 0;
-              const eventDeck = state.deckByEvent.get(rawEventId);
-              const name = eventDeck?.name ?? state.pendingDeckName;
-              const deck = eventDeck?.deck ?? state.pendingDeckList;
-              if (name && !name.startsWith('?=?')) {
-                const existing = state.deckUsages.get(name);
-                if (!existing || ts > existing.timestamp) {
-                  state.deckUsages.set(name, { deck, timestamp: ts });
-                }
+            const ts = typeof raw['timestamp'] === 'string' ? parseInt(raw['timestamp'], 10) : 0;
+            const eventDeck = state.deckByEvent.get(rawEventId);
+            const name = eventDeck?.name ?? state.pendingDeckName;
+            const deck = eventDeck?.deck ?? state.pendingDeckList;
+            if (name && !name.startsWith('?=?')) {
+              const existing = state.deckUsages.get(name);
+              if (!existing || ts > existing.timestamp) {
+                state.deckUsages.set(name, { deck, timestamp: ts });
               }
             }
           } else if (stateType === 'MatchGameRoomStateType_MatchCompleted' && gameRoomInfo) {
@@ -465,10 +475,11 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
   };
   const gameDataCollector = createGameDataCollector();
   const boardStateCollector = createBoardStateCollector();
+  const effectiveFilter = config.matchFilter ?? MatchFilters.all;
 
   for (const filename of logFiles) {
     const text = await readFile(join(config.logDir, filename), 'utf8');
-    parseLines(text.split('\n'), matchMap, localTeamIdMap, opponentGrpIds, myDeckListMap, state, gameDataCollector, boardStateCollector);
+    parseLines(text.split('\n'), matchMap, localTeamIdMap, opponentGrpIds, myDeckListMap, state, gameDataCollector, boardStateCollector, effectiveFilter);
   }
 
   // Derive opponent colors from collected grpIds via optional callback — resolved in parallel
