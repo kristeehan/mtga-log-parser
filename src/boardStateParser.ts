@@ -276,6 +276,8 @@ function buildSnapshot(
     oppBattlefield: getZoneObjects('ZoneType_Battlefield', 'opp', true),
     myGraveyard: getZoneObjects('ZoneType_Graveyard', 'mine', true),
     oppGraveyard: getZoneObjects('ZoneType_Graveyard', 'opp', true),
+    myExile: getZoneObjects('ZoneType_Exile', 'mine', true),
+    oppExile: getZoneObjects('ZoneType_Exile', 'opp', true),
     stack,
   };
 }

@@ -21,5 +21,7 @@ export interface TurnSnapshot {
   oppBattlefield: BoardCard[];
   myGraveyard: BoardCard[];
   oppGraveyard: BoardCard[];
+  myExile: BoardCard[];
+  oppExile: BoardCard[];
   stack: BoardCard[];
 }
