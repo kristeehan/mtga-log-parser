@@ -7,4 +7,5 @@ export interface GameSnapshot {
   opponentFinalLife: number;
   turnCount: number;             // max(myTurnNumber, oppTurnNumber) at game end
   gameEndReason: 'life' | 'concede' | 'timeout' | 'draw' | 'unknown';
+  openingHandGrpIds?: number[];  // grpIds from initial 7-card hand before any mulligan decision
 }

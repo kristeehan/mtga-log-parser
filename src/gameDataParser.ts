@@ -8,6 +8,8 @@ interface SnapshotBuilder {
   // GameStage_GameOver omits lifeTotal (common on life-total deaths).
   lastMyLife: number | null;
   lastOppLife: number | null;
+  openingHandCaptured: boolean;
+  openingHandGrpIds: number[];
 }
 
 function gameKey(matchId: string, gameNumber: number): string {
@@ -43,7 +45,7 @@ export function createGameDataCollector(): GameDataCollector {
 
   function getBuilder(matchId: string, gameNumber: number): SnapshotBuilder {
     const key = gameKey(matchId, gameNumber);
-    if (!builders.has(key)) builders.set(key, { myMulligan: 0, oppMulligan: 0, lastMyLife: null, lastOppLife: null });
+    if (!builders.has(key)) builders.set(key, { myMulligan: 0, oppMulligan: 0, lastMyLife: null, lastOppLife: null, openingHandCaptured: false, openingHandGrpIds: [] });
     return builders.get(key)!;
   }
 
@@ -105,6 +107,36 @@ export function createGameDataCollector(): GameDataCollector {
         }
       }
 
+      // Capture opening hand grpIds from the first full state message for this game.
+      // The initial 7-card hand is present before any mulligan decision changes the hand zone.
+      if (!builder.openingHandCaptured && gsm['type'] === 'GameStateType_Full') {
+        const zones = gsm['zones'] as Array<Record<string, unknown>> | undefined;
+        const gameObjects = gsm['gameObjects'] as Array<Record<string, unknown>> | undefined;
+        if (zones && gameObjects) {
+          const handZone = zones.find(
+            (z) => z['type'] === 'ZoneType_Hand' && z['ownerId'] === localSeatId,
+          );
+          if (handZone) {
+            const instanceIds = Array.isArray(handZone['objectInstanceIds'])
+              ? (handZone['objectInstanceIds'] as unknown[]).filter((x): x is number => typeof x === 'number')
+              : [];
+            const instanceIdSet = new Set(instanceIds);
+            const grpIds = gameObjects
+              .filter(
+                (o) =>
+                  typeof o['instanceId'] === 'number' &&
+                  instanceIdSet.has(o['instanceId'] as number) &&
+                  typeof o['grpId'] === 'number',
+              )
+              .map((o) => o['grpId'] as number);
+            if (grpIds.length > 0) {
+              builder.openingHandGrpIds = grpIds;
+              builder.openingHandCaptured = true;
+            }
+          }
+        }
+      }
+
       // Game end: capture final life, turn count, and end reason
       if (gameInfo?.['stage'] !== 'GameStage_GameOver') continue;
       if (!players || players.length === 0) continue;
@@ -142,6 +174,7 @@ export function createGameDataCollector(): GameDataCollector {
         opponentFinalLife: oppFinalLife,
         turnCount,
         gameEndReason: endReason,
+        openingHandGrpIds: builder.openingHandGrpIds.length > 0 ? builder.openingHandGrpIds : undefined,
       });
 
       // Suppress unused parameter warning — localTeamIdMap is accepted for API compatibility
