@@ -107,14 +107,15 @@ export function createGameDataCollector(): GameDataCollector {
         }
       }
 
-      // Capture opening hand grpIds from the first full state message for this game.
-      // The initial 7-card hand is present before any mulligan decision changes the hand zone.
-      if (!builder.openingHandCaptured && gsm['type'] === 'GameStateType_Full') {
+      // Capture opening hand grpIds from the first message where the local player's hand
+      // zone has cards. The initial deal arrives as a GameStateType_Diff (the preceding Full
+      // message establishes empty hand zones). Zones use ownerSeatId, not ownerId.
+      if (!builder.openingHandCaptured) {
         const zones = gsm['zones'] as Array<Record<string, unknown>> | undefined;
         const gameObjects = gsm['gameObjects'] as Array<Record<string, unknown>> | undefined;
         if (zones && gameObjects) {
           const handZone = zones.find(
-            (z) => z['type'] === 'ZoneType_Hand' && z['ownerId'] === localSeatId,
+            (z) => z['type'] === 'ZoneType_Hand' && z['ownerSeatId'] === localSeatId,
           );
           if (handZone) {
             const instanceIds = Array.isArray(handZone['objectInstanceIds'])
