@@ -261,6 +261,7 @@ function buildSnapshot(
     }
   }
 
+  if (gameNumber < 1 || gameNumber > 3) return null;
   const gn = gameNumber as 1 | 2 | 3;
 
   return {

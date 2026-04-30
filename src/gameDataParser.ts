@@ -100,7 +100,7 @@ export function createGameDataCollector(): GameDataCollector {
             else builder.oppMulligan = Math.max(builder.oppMulligan, mc);
           }
           const life = p['lifeTotal'];
-          if (typeof life === 'number' && life > 0) {
+          if (typeof life === 'number') {
             if (seat === localSeatId) builder.lastMyLife = life;
             else builder.lastOppLife = life;
           }
@@ -142,12 +142,13 @@ export function createGameDataCollector(): GameDataCollector {
       if (gameInfo?.['stage'] !== 'GameStage_GameOver') continue;
       if (!players || players.length === 0) continue;
 
+      if (currentGameNumber < 1 || currentGameNumber > 3) continue;
       const gameNumber = currentGameNumber as 1 | 2 | 3;
 
-      // results[] is cumulative across all games; index [gameNumber-1] is this game's result
+      // results[] is cumulative across all games; the last entry is the current game's result.
       const results = gameInfo['results'] as Array<Record<string, unknown>> | undefined;
       const gameResults = results?.filter((r) => r['scope'] === 'MatchScope_Game') ?? [];
-      const thisGameResult = gameResults[gameNumber - 1];
+      const thisGameResult = gameResults[gameResults.length - 1];
       const endReason = thisGameResult
         ? parseEndReason(thisGameResult['reason'] as string)
         : 'unknown';
