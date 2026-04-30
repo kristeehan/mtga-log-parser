@@ -6,6 +6,7 @@ export interface Match {
   id: string;           // matchId UUID from log
   timestamp: number;    // ms epoch from log
   opponent: string;     // opponent playerName from log
+  opponentPlatform: string; // opponent's client platform from log, e.g. "Mac", "Windows", "iOS", "Android"
   opponentDeck: string;   // manual entry, default ''
   opponentColors: string; // manual entry, e.g. "WU", "BR", "RG" — standard MTG color letters
   myDeck: string;         // auto-detected from log, default ''

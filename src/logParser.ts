@@ -204,6 +204,7 @@ function handleMatchStart(
     id: matchId,
     timestamp,
     opponent: (opponent['playerName'] as string) ?? 'Unknown',
+    opponentPlatform: (opponent['platformId'] as string) ?? '',
     opponentDeck: '',
     opponentColors: '',
     myDeck: resolvedDeckName,
