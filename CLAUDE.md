@@ -44,10 +44,14 @@ UTC_Log - *.log files
 
 ### Output types (src/types/)
 
-- `Match` — one record per completed match; `game2`/`game3` are `null` for Bo1
+- `Match` — one record per completed match; `game2`/`game3` are `null` for Bo1; includes `opponentPlatform` auto-captured from `reservedPlayers[].platformId`
 - `GameSnapshot` — life totals, mulligan counts, turn count, end reason; one per game
 - `TurnSnapshot` — full board state snapshot per phase; includes hand, battlefield, graveyard, stack for both players
 - `DeckList` — `{ main: CardEntry[], sideboard: CardEntry[] }` where each entry is `{ cardId, quantity }`
+
+### Analytics (src/analytics.ts)
+
+`opponentsByPlatform(matches: Match[]): Record<string, number>` — aggregates matches by opponent platform string. Exported from `src/index.ts`.
 
 ### Sub-collectors
 

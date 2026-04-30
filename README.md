@@ -1,6 +1,6 @@
 # mtga-log-parser
 
-Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, and per-turn board state records. Supports all formats — Ranked, Bo1, Bo3, limited, bot matches. No manual input required — match results, play/draw, deck names, and opponent card colors are all auto-detected from the log.
+Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, and per-turn board state records. Supports all formats — Ranked, Bo1, Bo3, limited, bot matches. No manual input required — match results, play/draw, deck names, opponent card colors, and opponent platform are all auto-detected from the log.
 
 ## Installation
 
@@ -98,6 +98,22 @@ const matches = await parseAllLogs({
 });
 ```
 
+## Analytics
+
+### `opponentsByPlatform(matches)`
+
+Returns a count of matches played against each opponent client platform. The platform string comes directly from the MTGA log (`"Mac"`, `"Windows"`, `"iOS"`, `"Android"`). Matches where the platform was not recorded fall under `"Unknown"`.
+
+```ts
+import { parseAllLogs, opponentsByPlatform } from 'mtga-log-parser';
+
+const { matches } = await parseAllLogs({ logDir: '...' });
+console.log(opponentsByPlatform(matches));
+// { Mac: 42, Windows: 18, iOS: 7, Android: 3 }
+```
+
+The raw value is also available per-match as `match.opponentPlatform`.
+
 ## Full debug output
 
 `parseAllLogsWithDebug` returns additional data alongside the match list:
@@ -140,3 +156,5 @@ const { parseAllLogs } = await import('mtga-log-parser');
 ## Platform note
 
 Local player detection checks `platformId === 'Mac'` first. On Windows, the parser falls back to a `systemSeatId === 1` heuristic, then to `players[0]`. Play/draw detection and color collection depend on correctly identifying the local player, so results are most reliable on Mac where `platformId` is present in the log.
+
+The opponent's `platformId` is captured as `match.opponentPlatform` regardless of which platform the local player is on.
