@@ -1,6 +1,6 @@
 {
   "name": "mtga-log-parser",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Parse MTGA (Magic: The Gathering Arena) log files into structured match, game snapshot, and board state data.",
   "type": "module",
   "main": "./dist/index.js",

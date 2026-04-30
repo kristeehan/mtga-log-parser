@@ -346,6 +346,9 @@ function parseLines(
     deckByEvent: Map<string, { name: string; deck: DeckList }>;
     gameEndReasonsMap: Map<string, string[]>;
     deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
+    // seatId→teamId per match, used to correct localTeamIdMap from GRE systemSeatIds
+    seatToTeamByMatch: Map<string, Map<number, number>>;
+    localTeamIdGREConfirmed: Set<string>;
   },
   gameDataCollector: ReturnType<typeof createGameDataCollector>,
   boardStateCollector: ReturnType<typeof createBoardStateCollector>,
@@ -415,7 +418,20 @@ function parseLines(
             // Track current match for GRE message association
             const config = gameRoomInfo['gameRoomConfig'] as Record<string, unknown> | undefined;
             const matchId = config?.['matchId'] as string | undefined;
-            if (matchId) state.currentMatchId = matchId;
+            if (matchId) {
+              state.currentMatchId = matchId;
+              // Build seatId→teamId map so GRE systemSeatIds can correct the localTeamId
+              // (platformId === 'Mac' fails when both players are on Mac)
+              const reservedPlayers = config?.['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
+              if (reservedPlayers) {
+                const seatTeam = new Map<number, number>();
+                for (const p of reservedPlayers) {
+                  const s = p['systemSeatId'], t = p['teamId'];
+                  if (typeof s === 'number' && typeof t === 'number') seatTeam.set(s, t);
+                }
+                state.seatToTeamByMatch.set(matchId, seatTeam);
+              }
+            }
 
             const players = config?.['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
             const rawEventId = (players?.[0]?.['eventId'] as string) ?? '';
@@ -442,6 +458,29 @@ function parseLines(
       const obj = tryParseJSON(line);
       if (obj && typeof obj === 'object') {
         const raw = obj as Record<string, unknown>;
+
+        // Correct localTeamId using GRE systemSeatIds — more reliable than the platformId
+        // heuristic, which fails when both players are on Mac. Use the first GRE message
+        // seen for each match (subsequent messages are the same seat so no need to repeat).
+        if (state.currentMatchId && !state.localTeamIdGREConfirmed.has(state.currentMatchId)) {
+          const gteEvent = raw['greToClientEvent'] as Record<string, unknown> | undefined;
+          const msgs = gteEvent?.['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
+          if (msgs) {
+            for (const msg of msgs) {
+              if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
+              const seatIds = msg['systemSeatIds'] as number[] | undefined;
+              const localSeatId = seatIds?.[0];
+              if (typeof localSeatId !== 'number') continue;
+              const teamId = state.seatToTeamByMatch.get(state.currentMatchId)?.get(localSeatId);
+              if (typeof teamId === 'number') {
+                localTeamIdMap.set(state.currentMatchId, teamId);
+                state.localTeamIdGREConfirmed.add(state.currentMatchId);
+              }
+              break;
+            }
+          }
+        }
+
         tryExtractGameState(raw, matchMap, state.currentMatchId, opponentGrpIds);
         gameDataCollector.collect(raw, state.currentMatchId, localTeamIdMap);
         boardStateCollector.collect(raw, state.currentMatchId);
@@ -472,6 +511,8 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
     deckByEvent: new Map<string, { name: string; deck: DeckList }>(),
     gameEndReasonsMap: new Map<string, string[]>(),
     deckUsages: new Map<string, { deck: DeckList; timestamp: number }>(),
+    seatToTeamByMatch: new Map<string, Map<number, number>>(),
+    localTeamIdGREConfirmed: new Set<string>(),
   };
   const gameDataCollector = createGameDataCollector();
   const boardStateCollector = createBoardStateCollector();
