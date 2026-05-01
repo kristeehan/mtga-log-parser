@@ -448,7 +448,10 @@ function parseLines(
             }
           } else if (stateType === 'MatchGameRoomStateType_MatchCompleted' && gameRoomInfo) {
             handleMatchEnd(gameRoomInfo, matchMap, localTeamIdMap, state.gameEndReasonsMap);
-            state.currentMatchId = null;
+            // Do NOT null currentMatchId here — MTGA often writes trailing GRE messages for
+            // the final turns after the MatchCompleted event. Keeping currentMatchId set lets
+            // the board state and game data collectors capture those. The next MatchPlaying
+            // event naturally replaces it when the next match begins.
           }
         }
       }
