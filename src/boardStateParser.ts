@@ -16,7 +16,7 @@ interface RawGameObject {
 interface RawZone {
   zoneId: number;
   type?: string;
-  ownerId?: number;
+  ownerSeatId?: number;
   objectInstanceIds?: number[];
 }
 
@@ -110,12 +110,12 @@ function toZone(raw: Record<string, unknown>): RawZone | null {
   if (typeof zoneId !== 'number') return null;
 
   const type = typeof raw['type'] === 'string' ? raw['type'] : undefined;
-  const ownerId = typeof raw['ownerId'] === 'number' ? raw['ownerId'] : undefined;
+  const ownerSeatId = typeof raw['ownerSeatId'] === 'number' ? raw['ownerSeatId'] : undefined;
   const objectInstanceIds = Array.isArray(raw['objectInstanceIds'])
     ? (raw['objectInstanceIds'] as unknown[]).filter((x): x is number => typeof x === 'number')
     : undefined;
 
-  return { zoneId, type, ownerId, objectInstanceIds };
+  return { zoneId, type, ownerSeatId, objectInstanceIds };
 }
 
 function toPlayer(raw: Record<string, unknown>): RawPlayer {
@@ -178,11 +178,11 @@ function buildSnapshot(
     for (const zone of zones.values()) {
       if (zone.type !== zoneType) continue;
 
-      // For hand/graveyard: filter to the correct player's zone via zone.ownerId.
+      // For hand/graveyard: filter to the correct player's zone via zone.ownerSeatId.
       // Battlefield is shared — filtering happens per-object via controllerSeatId below.
-      if (!isBattlefield && ownerFilter !== 'any' && zone.ownerId !== undefined) {
-        if (ownerFilter === 'mine' && zone.ownerId !== localSeatId) continue;
-        if (ownerFilter === 'opp' && zone.ownerId === localSeatId) continue;
+      if (!isBattlefield && ownerFilter !== 'any' && zone.ownerSeatId !== undefined) {
+        if (ownerFilter === 'mine' && zone.ownerSeatId !== localSeatId) continue;
+        if (ownerFilter === 'opp' && zone.ownerSeatId === localSeatId) continue;
       }
 
       if (zone.objectInstanceIds) {
@@ -206,8 +206,8 @@ function buildSnapshot(
             if (ownerFilter === 'opp' && controller !== undefined && controller === localSeatId) continue;
           }
 
-          // For hand/graveyard: if zone.ownerId was absent, fall back to per-object ownerSeatId.
-          // Also acts as a belt-and-suspenders check even when zone.ownerId is set.
+          // For hand/graveyard: if zone.ownerSeatId was absent, fall back to per-object ownerSeatId.
+          // Also acts as a belt-and-suspenders check even when zone.ownerSeatId is set.
           if (!isBattlefield && ownerFilter !== 'any' && obj.ownerSeatId !== undefined) {
             if (ownerFilter === 'mine' && obj.ownerSeatId !== localSeatId) continue;
             if (ownerFilter === 'opp' && obj.ownerSeatId === localSeatId) continue;
@@ -287,7 +287,7 @@ export interface RawStateDebug {
   gameNumber: number | null;
   localSeatId: number | null;
   turnInfo: RawTurnInfo | null;
-  zones: Array<{ zoneId: number; type?: string; ownerId?: number; objectCount: number }>;
+  zones: Array<{ zoneId: number; type?: string; ownerSeatId?: number; objectCount: number }>;
   gameObjects: Array<{ instanceId: number; grpId?: number; zoneId?: number; type?: string; ownerSeatId?: number; controllerSeatId?: number; isTapped: boolean }>;
 }
 
@@ -449,7 +449,7 @@ export function createBoardStateCollector(): BoardStateCollector {
               state.zones.set(zone.zoneId, {
                 zoneId: zone.zoneId,
                 type: zone.type ?? existing.type,
-                ownerId: zone.ownerId ?? existing.ownerId,
+                ownerSeatId: zone.ownerSeatId ?? existing.ownerSeatId,
                 objectInstanceIds: zone.objectInstanceIds ?? existing.objectInstanceIds,
               });
             } else {
@@ -529,7 +529,7 @@ export function createBoardStateCollector(): BoardStateCollector {
       zones: Array.from(state.zones.values()).map((z) => ({
         zoneId: z.zoneId,
         type: z.type,
-        ownerId: z.ownerId,
+        ownerSeatId: z.ownerSeatId,
         objectCount: z.objectInstanceIds?.length ?? 0,
       })),
       gameObjects: Array.from(state.gameObjects.values()).map((o) => ({
