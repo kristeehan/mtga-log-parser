@@ -40,6 +40,11 @@ interface LiveGameState {
   turnInfo: RawTurnInfo | null;
   gameNumber: number | null;
   localSeatId: number | null;
+  // MTGA sometimes advances turnNumber before all combat phases are logged.
+  // Track the turn and active player at BeginCombat so continuation phases
+  // (DeclareAttackers → CombatDamage → EndCombat) are attributed to the correct turn.
+  activeCombatTurn: number | null;
+  activeCombatPlayer: number | undefined;
 }
 
 function gameKey(matchId: string, gameNumber: number): string {
@@ -333,6 +338,8 @@ export function createBoardStateCollector(): BoardStateCollector {
         turnInfo: null,
         gameNumber,
         localSeatId: null,
+        activeCombatTurn: null,
+        activeCombatPlayer: undefined,
       });
     }
     return liveStates.get(key)!;
@@ -367,12 +374,11 @@ export function createBoardStateCollector(): BoardStateCollector {
     const messages = gteEvent['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
     if (!messages) return;
 
-    // Defer snapshot emission until after all messages in this batch are processed.
-    // Untap/draw state updates often arrive in later messages of the same batch, so emitting
-    // immediately on phase-change would snapshot the previous-turn tapped state instead of
-    // the post-untap state. Since `state` is a mutable reference, deferring captures the
-    // final state for the whole batch.
-    const pendingEmits: Array<{ state: LiveGameState; phase: string; turnNumber: number; activePlayer: number | undefined }> = [];
+    // Combat continuation phases: MTGA sometimes advances turnNumber before these are logged,
+    // so we attribute them to the turn where BeginCombat was first seen.
+    const COMBAT_CONTINUATION = new Set([
+      'Step_DeclareAttack', 'Step_DeclareBlock', 'Step_CombatDamage', 'Step_EndCombat',
+    ]);
 
     for (const msg of messages) {
       if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
@@ -513,21 +519,34 @@ export function createBoardStateCollector(): BoardStateCollector {
       const phaseLabel = step || phase;
       const prevPhase = lastPhases.get(turnKey);
 
-      // Queue a snapshot at every phase/step transition (new turn or label change within same turn).
-      // Actual emission is deferred to after the message batch loop below.
+      // Track combat start so continuation phases can be attributed to the correct turn
+      // even when MTGA has already advanced turnNumber by the time it logs them.
+      if (phaseLabel === 'Step_BeginCombat') {
+        state.activeCombatTurn = currentTurn;
+        state.activeCombatPlayer = state.turnInfo.activePlayer;
+      }
+      const effectiveTurn = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
+        ? state.activeCombatTurn
+        : currentTurn;
+      const effectivePlayer = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
+        ? state.activeCombatPlayer
+        : state.turnInfo.activePlayer;
+      if (phaseLabel === 'Step_EndCombat') {
+        state.activeCombatTurn = null;
+        state.activeCombatPlayer = undefined;
+      }
+
+      // Emit a snapshot immediately after each message's state updates are applied.
+      // This ensures each snapshot reflects the board state at that exact phase transition,
+      // rather than at the end of the batch (which may span multiple turns).
       if (prevTurn !== currentTurn) {
         lastTurnNumbers.set(turnKey, currentTurn);
         lastPhases.set(turnKey, phaseLabel);
-        pendingEmits.push({ state, phase: phaseLabel, turnNumber: currentTurn, activePlayer: state.turnInfo?.activePlayer });
+        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
       } else if (phaseLabel !== prevPhase) {
         lastPhases.set(turnKey, phaseLabel);
-        pendingEmits.push({ state, phase: phaseLabel, turnNumber: currentTurn, activePlayer: state.turnInfo?.activePlayer });
+        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
       }
-    }
-
-    // Emit all queued snapshots now that the full batch has been applied to state.
-    for (const e of pendingEmits) {
-      tryEmit(currentMatchId, e.state, e.phase, e.turnNumber, e.activePlayer);
     }
   }
 
