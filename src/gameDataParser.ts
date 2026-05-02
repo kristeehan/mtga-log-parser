@@ -130,7 +130,10 @@ export function createGameDataCollector(): GameDataCollector {
                   typeof o['grpId'] === 'number',
               )
               .map((o) => o['grpId'] as number);
-            if (grpIds.length > 0) {
+            // Only capture when we have a full 7-card opening hand. MTGA always deals the
+            // initial hand as a single Diff message, so < 7 means a partial batch and we
+            // should wait for the rest rather than locking openingHandCaptured prematurely.
+            if (grpIds.length >= 7) {
               builder.openingHandGrpIds = grpIds;
               builder.openingHandCaptured = true;
             }

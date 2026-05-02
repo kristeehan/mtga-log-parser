@@ -142,15 +142,22 @@ function buildSnapshot(
   matchId: string,
   state: LiveGameState,
   phase: string,
+  // Capture turn number and active player at the moment of the phase transition rather than
+  // at emit time. A single GRE batch can span two turns (e.g., end of turn N and start of
+  // turn N+1); by the time all messages are processed, state.turnInfo.turnNumber has already
+  // advanced, causing earlier-turn phases to be stamped with the new turn number.
+  capturedTurnNumber?: number,
+  capturedActivePlayer?: number,
 ): TurnSnapshot | null {
   const { gameObjects, zones, players, turnInfo, gameNumber, localSeatId } = state;
 
-  if (!turnInfo || turnInfo.turnNumber === undefined || gameNumber === null || localSeatId === null) {
+  const turnNumber = capturedTurnNumber ?? turnInfo?.turnNumber;
+  if (turnNumber === undefined || gameNumber === null || localSeatId === null) {
     return null;
   }
 
-  const turnNumber = turnInfo.turnNumber;
-  const activePlayerIsMe = turnInfo.activePlayer === localSeatId;
+  const activePlayerSeat = capturedActivePlayer ?? turnInfo?.activePlayer;
+  const activePlayerIsMe = activePlayerSeat === localSeatId;
 
   // Life totals
   let myLife = 20;
@@ -331,16 +338,21 @@ export function createBoardStateCollector(): BoardStateCollector {
     return liveStates.get(key)!;
   }
 
-  function tryEmit(matchId: string, state: LiveGameState, phaseLabel: string): void {
+  function tryEmit(
+    matchId: string,
+    state: LiveGameState,
+    phaseLabel: string,
+    capturedTurnNumber: number,
+    capturedActivePlayer: number | undefined,
+  ): void {
     if (state.gameNumber === null) return;
-    const turnNum = state.turnInfo?.turnNumber ?? 0;
-    const key = `${gameKey(matchId, state.gameNumber)}:${turnNum}`;
+    const key = `${gameKey(matchId, state.gameNumber)}:${capturedTurnNumber}`;
     // Skip consecutive duplicates — pendingEmits already deduplicates within a batch;
     // this catches the rare case of MTGA re-broadcasting the same phase in a later batch.
     if (lastEmittedLabel.get(key) === phaseLabel) return;
     lastEmittedLabel.set(key, phaseLabel);
 
-    const snapshot = buildSnapshot(matchId, state, phaseLabel);
+    const snapshot = buildSnapshot(matchId, state, phaseLabel, capturedTurnNumber, capturedActivePlayer);
     if (snapshot) completed.push(snapshot);
   }
 
@@ -360,7 +372,7 @@ export function createBoardStateCollector(): BoardStateCollector {
     // immediately on phase-change would snapshot the previous-turn tapped state instead of
     // the post-untap state. Since `state` is a mutable reference, deferring captures the
     // final state for the whole batch.
-    const pendingEmits: Array<{ state: LiveGameState; phase: string }> = [];
+    const pendingEmits: Array<{ state: LiveGameState; phase: string; turnNumber: number; activePlayer: number | undefined }> = [];
 
     for (const msg of messages) {
       if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
@@ -506,16 +518,16 @@ export function createBoardStateCollector(): BoardStateCollector {
       if (prevTurn !== currentTurn) {
         lastTurnNumbers.set(turnKey, currentTurn);
         lastPhases.set(turnKey, phaseLabel);
-        pendingEmits.push({ state, phase: phaseLabel });
+        pendingEmits.push({ state, phase: phaseLabel, turnNumber: currentTurn, activePlayer: state.turnInfo?.activePlayer });
       } else if (phaseLabel !== prevPhase) {
         lastPhases.set(turnKey, phaseLabel);
-        pendingEmits.push({ state, phase: phaseLabel });
+        pendingEmits.push({ state, phase: phaseLabel, turnNumber: currentTurn, activePlayer: state.turnInfo?.activePlayer });
       }
     }
 
     // Emit all queued snapshots now that the full batch has been applied to state.
     for (const e of pendingEmits) {
-      tryEmit(currentMatchId, e.state, e.phase);
+      tryEmit(currentMatchId, e.state, e.phase, e.turnNumber, e.activePlayer);
     }
   }
 
