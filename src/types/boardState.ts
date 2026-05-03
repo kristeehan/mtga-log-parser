@@ -17,6 +17,7 @@ export interface TurnSnapshot {
   myLife: number;
   oppLife: number;
   myHand: BoardCard[];
+  oppHandCount: number;
   myBattlefield: BoardCard[];
   oppBattlefield: BoardCard[];
   myGraveyard: BoardCard[];

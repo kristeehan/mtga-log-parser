@@ -262,6 +262,16 @@ function buildSnapshot(
     return cards;
   }
 
+  // Opponent hand count — cards are face-down (grpId=0/undefined) so getZoneObjects skips them.
+  // Count all objects in the opponent's hand zone directly.
+  let oppHandCount = 0;
+  for (const zone of zones.values()) {
+    if (zone.type !== 'ZoneType_Hand') continue;
+    if (zone.ownerSeatId === localSeatId) continue;
+    oppHandCount += zone.objectInstanceIds?.length
+      ?? [...gameObjects.values()].filter(o => o.zoneId === zone.zoneId).length;
+  }
+
   // Stack: use zone.objectInstanceIds as authoritative to avoid stale resolved objects.
   const stack: BoardCard[] = [];
   for (const zone of zones.values()) {
@@ -285,6 +295,7 @@ function buildSnapshot(
     myLife,
     oppLife,
     myHand: getZoneObjects('ZoneType_Hand', 'mine', true),
+    oppHandCount,
     myBattlefield: getZoneObjects('ZoneType_Battlefield', 'mine', true),
     oppBattlefield: getZoneObjects('ZoneType_Battlefield', 'opp', true),
     myGraveyard: getZoneObjects('ZoneType_Graveyard', 'mine', true),
