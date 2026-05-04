@@ -155,6 +155,4 @@ const { parseAllLogs } = await import('mtga-log-parser');
 
 ## Platform note
 
-Local player detection checks `platformId === 'Mac'` first. On Windows, the parser falls back to a `systemSeatId === 1` heuristic, then to `players[0]`. Play/draw detection and color collection depend on correctly identifying the local player, so results are most reliable on Mac where `platformId` is present in the log.
-
-The opponent's `platformId` is captured as `match.opponentPlatform` regardless of which platform the local player is on.
+Local player detection originally checked `platformId === 'Mac'` first, because the program was generated on a Mac. This has been corrected.
