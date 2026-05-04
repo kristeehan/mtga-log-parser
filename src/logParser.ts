@@ -63,7 +63,7 @@ export interface ParseResult {
 }
 
 // Inlined from src/lib/stats.ts — kept here to avoid a runtime dependency
-function computeMatchResult(g1: GameResult, g2: GameResult, g3: GameResult): MatchResult {
+export function computeMatchResult(g1: GameResult, g2: GameResult, g3: GameResult): MatchResult {
   if (g1 === null) return null;
 
   const results = [g1, g2, g3].filter((g) => g !== null) as (1 | 0 | 'Draw')[];
@@ -88,7 +88,7 @@ interface RawGameResult {
   reason: string;
 }
 
-function parseLogDate(filename: string): number {
+export function parseLogDate(filename: string): number {
   const match = filename.match(/(\d{2})-(\d{2})-(\d{4}) (\d{2})\.(\d{2})\.(\d{2})/);
   if (!match) return Infinity;
   const [, mm, dd, yyyy, hh, min, ss] = match;
@@ -108,7 +108,7 @@ function tryParseJSON(line: string): unknown {
 // Extract deck name and full card list from an EventSetDeckV2 response line/object.
 // The event name varies by queue (Traditional_Ladder, Play, Constructed_BestOf3, etc.) — we
 // detect by structure, not by event name.
-function extractDeckInfo(obj: Record<string, unknown>): { name: string; deck: DeckList } | null {
+export function extractDeckInfo(obj: Record<string, unknown>): { name: string; deck: DeckList } | null {
   const toEntries = (arr: Array<Record<string, unknown>> | undefined): CardEntry[] =>
     (arr ?? []).flatMap((c) => {
       const cardId = c['cardId'];
@@ -334,31 +334,35 @@ function tryExtractGameState(
   }
 }
 
-function parseLines(
-  lines: string[],
+type MatchFilter = (eventId: string) => boolean;
+
+interface Session {
   matchMap: Map<string, Match>,
   localTeamIdMap: Map<string, number>,
   opponentGrpIds: Map<string, Set<number>>,
   myDeckListMap: Map<string, DeckList>,
-  state: {
-    pendingDeckName: string;
-    pendingDeckList: DeckList;
-    currentMatchId: string | null;
-    deckByEvent: Map<string, { name: string; deck: DeckList }>;
-    gameEndReasonsMap: Map<string, string[]>;
-    deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
+
+    pendingDeckName: string,
+    pendingDeckList: DeckList,
+    currentMatchId: string | null,
+    deckByEvent: Map<string, { name: string; deck: DeckList }>,
+    gameEndReasonsMap: Map<string, string[]>,
+    deckUsages: Map<string, { deck: DeckList; timestamp: number }>,
     // seatId→teamId per match, used to correct localTeamIdMap from GRE systemSeatIds
-    seatToTeamByMatch: Map<string, Map<number, number>>;
-    localTeamIdGREConfirmed: Set<string>;
-  },
+    seatToTeamByMatch: Map<string, Map<number, number>>,
+    localTeamIdGREConfirmed: Set<string>,
+
+}
+
+interface ParseSession {
+  lines: string[],
+  session: Session
   gameDataCollector: ReturnType<typeof createGameDataCollector>,
   boardStateCollector: ReturnType<typeof createBoardStateCollector>,
-  matchFilter: (eventId: string) => boolean,
-): void {
-  for (const line of lines) {
-    // Deck name + card list detection: EventSetDeckV2 response or CourseDeckSummary
-    if (line.includes('EventSetDeckV2') || line.includes('CourseDeckSummary')) {
-      const obj = tryParseJSON(line);
+  matchFilter: MatchFilter,
+}
+function handleParseDeck(line:string, session: Session) {
+   const obj = tryParseJSON(line);
       if (obj && typeof obj === 'object') {
         const raw = obj as Record<string, unknown>;
 
@@ -384,7 +388,7 @@ function parseLines(
             if (typeof name !== 'string' || name.startsWith('?=?')) continue;
             const rawMain = courseDeck?.['MainDeck'] as Array<Record<string, unknown>> | undefined;
             const rawSide = courseDeck?.['Sideboard'] as Array<Record<string, unknown>> | undefined;
-            state.deckByEvent.set(eventName, {
+            session.deckByEvent.set(eventName, {
               name,
               deck: { main: toEntries(rawMain), sideboard: toEntries(rawSide) },
             });
@@ -394,19 +398,18 @@ function parseLines(
         // Individual EventSetDeckV2 / single-course CourseDeckSummary event
         const info = extractDeckInfo(raw);
         if (info) {
-          state.pendingDeckName = info.name;
-          state.pendingDeckList = info.deck;
+          session.pendingDeckName = info.name;
+          session.pendingDeckList = info.deck;
           const eventName = raw['InternalEventName'];
           if (typeof eventName === 'string') {
-            state.deckByEvent.set(eventName, { name: info.name, deck: info.deck });
+            session.deckByEvent.set(eventName, { name: info.name, deck: info.deck });
           }
         }
       }
-    }
+}
 
-    // Match state changes
-    if (line.includes('matchGameRoomStateChangedEvent')) {
-      const obj = tryParseJSON(line);
+function handleParseMatchStateChange(line: string, session: Session, ps: ParseSession) {
+ const obj = tryParseJSON(line);
       if (obj && typeof obj === 'object') {
         const raw = obj as Record<string, unknown>;
         const event = raw['matchGameRoomStateChangedEvent'] as Record<string, unknown> | undefined;
@@ -415,12 +418,12 @@ function parseLines(
           const stateType = (event['stateType'] ?? gameRoomInfo?.['stateType']) as string | undefined;
 
           if (stateType === 'MatchGameRoomStateType_Playing' && gameRoomInfo) {
-            handleMatchStart(raw, gameRoomInfo, matchMap, localTeamIdMap, state.pendingDeckName, myDeckListMap, state.pendingDeckList, state.deckByEvent, matchFilter);
+            handleMatchStart(raw, gameRoomInfo, session.matchMap, session.localTeamIdMap, session.pendingDeckName, session.myDeckListMap, session.pendingDeckList, session.deckByEvent, ps.matchFilter);
             // Track current match for GRE message association
             const config = gameRoomInfo['gameRoomConfig'] as Record<string, unknown> | undefined;
             const matchId = config?.['matchId'] as string | undefined;
             if (matchId) {
-              state.currentMatchId = matchId;
+              session.currentMatchId = matchId;
               // Build seatId→teamId map so GRE systemSeatIds can correct the localTeamId
               // (platformId === 'Mac' fails when both players are on Mac)
               const reservedPlayers = config?.['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
@@ -430,24 +433,24 @@ function parseLines(
                   const s = p['systemSeatId'], t = p['teamId'];
                   if (typeof s === 'number' && typeof t === 'number') seatTeam.set(s, t);
                 }
-                state.seatToTeamByMatch.set(matchId, seatTeam);
+                session.seatToTeamByMatch.set(matchId, seatTeam);
               }
             }
 
             const players = config?.['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
             const rawEventId = (players?.[0]?.['eventId'] as string) ?? '';
             const ts = typeof raw['timestamp'] === 'string' ? parseInt(raw['timestamp'], 10) : 0;
-            const eventDeck = state.deckByEvent.get(rawEventId);
-            const name = eventDeck?.name ?? state.pendingDeckName;
-            const deck = eventDeck?.deck ?? state.pendingDeckList;
+            const eventDeck = session.deckByEvent.get(rawEventId);
+            const name = eventDeck?.name ?? session.pendingDeckName;
+            const deck = eventDeck?.deck ?? session.pendingDeckList;
             if (name && !name.startsWith('?=?')) {
-              const existing = state.deckUsages.get(name);
+              const existing = session.deckUsages.get(name);
               if (!existing || ts > existing.timestamp) {
-                state.deckUsages.set(name, { deck, timestamp: ts });
+                session.deckUsages.set(name, { deck, timestamp: ts });
               }
             }
           } else if (stateType === 'MatchGameRoomStateType_MatchCompleted' && gameRoomInfo) {
-            handleMatchEnd(gameRoomInfo, matchMap, localTeamIdMap, state.gameEndReasonsMap);
+            handleMatchEnd(gameRoomInfo, session.matchMap, session.localTeamIdMap, session.gameEndReasonsMap);
             // Do NOT null currentMatchId here — MTGA often writes trailing GRE messages for
             // the final turns after the MatchCompleted event. Keeping currentMatchId set lets
             // the board state and game data collectors capture those. The next MatchPlaying
@@ -455,18 +458,17 @@ function parseLines(
           }
         }
       }
-    }
+}
 
-    // Play/draw + opponent card detection + game snapshot data from GRE GameStateMessages
-    if (line.includes('greToClientEvent') && line.includes('GameStateMessage')) {
-      const obj = tryParseJSON(line);
+function handleParseGREEventLine(line: string, session: Session, ps: ParseSession) {
+   const obj = tryParseJSON(line);
       if (obj && typeof obj === 'object') {
         const raw = obj as Record<string, unknown>;
 
         // Correct localTeamId using GRE systemSeatIds — more reliable than the platformId
         // heuristic, which fails when both players are on Mac. Use the first GRE message
         // seen for each match (subsequent messages are the same seat so no need to repeat).
-        if (state.currentMatchId && !state.localTeamIdGREConfirmed.has(state.currentMatchId)) {
+        if (session.currentMatchId && !session.localTeamIdGREConfirmed.has(session.currentMatchId)) {
           const gteEvent = raw['greToClientEvent'] as Record<string, unknown> | undefined;
           const msgs = gteEvent?.['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
           if (msgs) {
@@ -475,20 +477,38 @@ function parseLines(
               const seatIds = msg['systemSeatIds'] as number[] | undefined;
               const localSeatId = seatIds?.[0];
               if (typeof localSeatId !== 'number') continue;
-              const teamId = state.seatToTeamByMatch.get(state.currentMatchId)?.get(localSeatId);
+              const teamId = session.seatToTeamByMatch.get(session.currentMatchId)?.get(localSeatId);
               if (typeof teamId === 'number') {
-                localTeamIdMap.set(state.currentMatchId, teamId);
-                state.localTeamIdGREConfirmed.add(state.currentMatchId);
+                session.localTeamIdMap.set(session.currentMatchId, teamId);
+                session.localTeamIdGREConfirmed.add(session.currentMatchId);
               }
               break;
             }
           }
         }
 
-        tryExtractGameState(raw, matchMap, state.currentMatchId, opponentGrpIds);
-        gameDataCollector.collect(raw, state.currentMatchId, localTeamIdMap);
-        boardStateCollector.collect(raw, state.currentMatchId);
+        tryExtractGameState(raw, session.matchMap, session.currentMatchId, session.opponentGrpIds);
+        ps.gameDataCollector.collect(raw, session.currentMatchId, session.localTeamIdMap);
+        ps.boardStateCollector.collect(raw, session.currentMatchId);
       }
+}
+
+function parseLinesAndAddToSession(ps: ParseSession): void {
+  const session = ps.session;
+  for (const line of ps.lines) {
+    // Deck name + card list detection: EventSetDeckV2 response or CourseDeckSummary
+    if (line.includes('EventSetDeckV2') || line.includes('CourseDeckSummary')) {
+      handleParseDeck(line, session);
+    }
+
+    // Match state changes
+    if (line.includes('matchGameRoomStateChangedEvent')) {
+     handleParseMatchStateChange(line, session, ps)
+    }
+
+    // Play/draw + opponent card detection + game snapshot data from GRE GameStateMessages
+    if (line.includes('greToClientEvent') && line.includes('GameStateMessage')) {
+     handleParseGREEventLine(line, session, ps)
     }
   }
 }
@@ -497,35 +517,47 @@ export async function parseAllLogs(config: ParseConfig): Promise<Match[]> {
   return (await parseAllLogsWithDebug(config)).matches;
 }
 
+function buildNewSession(matchFilter: MatchFilter): ParseSession {
+  const emptyDeck: DeckList = { main: [], sideboard: [] };
+  return {
+    lines: [],
+    matchFilter,
+    session: {
+      matchMap: new Map(),
+      localTeamIdMap: new Map(),
+      opponentGrpIds: new Map(),
+      myDeckListMap: new Map(),
+      pendingDeckName: '',
+      pendingDeckList: emptyDeck,
+      currentMatchId: null,
+      deckByEvent: new Map(),
+      gameEndReasonsMap: new Map(),
+      deckUsages: new Map(),
+      seatToTeamByMatch: new Map(),
+      localTeamIdGREConfirmed: new Set(),
+    },
+    gameDataCollector: createGameDataCollector(),
+    boardStateCollector: createBoardStateCollector(),
+  };
+}
+
 export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseResult> {
   const entries = await readdir(config.logDir);
   const logFiles = entries
     .filter((f) => f.startsWith('UTC_Log') && f.endsWith('.log'))
     .sort((a, b) => parseLogDate(a) - parseLogDate(b));
 
-  const matchMap = new Map<string, Match>();
-  const localTeamIdMap = new Map<string, number>();
-  const opponentGrpIds = new Map<string, Set<number>>();
-  const myDeckListMap = new Map<string, DeckList>();
-  const emptyDeck: DeckList = { main: [], sideboard: [] };
-  const state = {
-    pendingDeckName: '',
-    pendingDeckList: emptyDeck,
-    currentMatchId: null as string | null,
-    deckByEvent: new Map<string, { name: string; deck: DeckList }>(),
-    gameEndReasonsMap: new Map<string, string[]>(),
-    deckUsages: new Map<string, { deck: DeckList; timestamp: number }>(),
-    seatToTeamByMatch: new Map<string, Map<number, number>>(),
-    localTeamIdGREConfirmed: new Set<string>(),
-  };
-  const gameDataCollector = createGameDataCollector();
-  const boardStateCollector = createBoardStateCollector();
   const effectiveFilter = config.matchFilter ?? MatchFilters.all;
+  const ps = buildNewSession(effectiveFilter);
 
   for (const filename of logFiles) {
     const text = await readFile(join(config.logDir, filename), 'utf8');
-    parseLines(text.split('\n'), matchMap, localTeamIdMap, opponentGrpIds, myDeckListMap, state, gameDataCollector, boardStateCollector, effectiveFilter);
+    ps.lines = text.split('\n');
+    parseLinesAndAddToSession(ps);
   }
+
+  const { matchMap, opponentGrpIds, myDeckListMap, gameEndReasonsMap, deckUsages } = ps.session;
+  const { gameDataCollector, boardStateCollector } = ps;
 
   // Derive opponent colors from collected grpIds via optional callback — resolved in parallel
   await Promise.all(
@@ -546,7 +578,7 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
   // reasons which can mislabel life-total deaths as concedes.
   const rawGameSnapshots = gameDataCollector.snapshots().filter((s) => matchIds.has(s.matchId));
   const gameSnapshots = rawGameSnapshots.map((s) => {
-    const rawReason = state.gameEndReasonsMap.get(s.matchId)?.[s.gameNumber - 1];
+    const rawReason = gameEndReasonsMap.get(s.matchId)?.[s.gameNumber - 1];
     if (!rawReason) return s;
     const gameEndReason: GameSnapshot['gameEndReason'] =
       rawReason === 'ResultReason_Life' ? 'life' :
@@ -565,6 +597,6 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
     boardSnapshots,
     myDeckListMap,
     boardStateCollector,
-    deckUsages: state.deckUsages,
+    deckUsages,
   };
 }
