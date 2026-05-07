@@ -89,7 +89,6 @@ export function createGameDataCollector(): GameDataCollector {
 
       // Mulligan tracking + life total tracking. Life totals here serve as fallback for
       // the GameStage_GameOver handler, which sometimes omits lifeTotal on death events.
-      // Only track positive values — a 0/negative reading would be the death itself.
       const builder = getBuilder(currentMatchId, currentGameNumber);
       if (players) {
         for (const p of players) {
