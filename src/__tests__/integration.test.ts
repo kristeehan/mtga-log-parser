@@ -63,7 +63,7 @@ function matchStartLine(opts: {
 
 function matchEndLine(opts: {
   matchId: string;
-  results: Array<{ winningTeamId: number; reason?: string }>;
+  results: Array<{ scope?: string; winningTeamId: number; reason?: string }>;
 }): string {
   const json = {
     matchGameRoomStateChangedEvent: {
@@ -72,7 +72,7 @@ function matchEndLine(opts: {
         finalMatchResult: {
           matchId: opts.matchId,
           resultList: opts.results.map((r) => ({
-            scope: 'MatchScope_Game',
+            scope: r.scope ?? 'MatchScope_Game',
             winningTeamId: r.winningTeamId,
             reason: r.reason ?? 'ResultReason_Life',
           })),
@@ -353,6 +353,35 @@ describe('parseAllLogsWithDebug integration', () => {
 
     expect(matches).toHaveLength(1);
     expect(matches[0].opponentColors).toBe('');
+  });
+
+  it('captures a Bo3 won by opponent timeout mid-series (1-1 game record, match-scope result wins)', async () => {
+    // Scenario: player loses game 1, then opponent times out before/during game 2.
+    // MTGA awards game 2 and the match to the player via MatchScope_Match entry.
+    // computeMatchResult(0, 1, null) returns null (1-1 tie), so the match-scope
+    // entry must be used as the authoritative fallback.
+    const dir = await makeTempDir();
+    const lines = [
+      matchStartLine({ matchId: 'match-timeout', local: { eventId: 'Constructed_BestOf3' }, opponent: { eventId: 'Constructed_BestOf3' } }),
+      matchEndLine({
+        matchId: 'match-timeout',
+        results: [
+          { scope: 'MatchScope_Game',  winningTeamId: 2, reason: 'ResultReason_Concede' },
+          { scope: 'MatchScope_Game',  winningTeamId: 1, reason: 'ResultReason_Timeout' },
+          { scope: 'MatchScope_Match', winningTeamId: 1, reason: 'ResultReason_Timeout' },
+        ],
+      }),
+    ];
+    await writeFile(join(dir, logFilename()), lines.join('\n'));
+
+    const { matches } = await parseAllLogsWithDebug({ logDir: dir });
+
+    expect(matches).toHaveLength(1);
+    const m = matches[0];
+    expect(m.matchResult).toBe('Win');
+    expect(m.game1).toBe(0);
+    expect(m.game2).toBe(1);
+    expect(m.game3).toBeNull();
   });
 
   it('patches gameEndReason in gameSnapshots from finalMatchResult reasons', async () => {
