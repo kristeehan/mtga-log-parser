@@ -264,12 +264,24 @@ function handleMatchEnd(
   const g2: GameResult = games[1] ?? null;
   const g3: GameResult = games[2] ?? null;
 
+  // Primary: derive result from game scores. Fallback: use the match-scope entry in
+  // resultList for cases where game scores are tied (e.g. 1-1 when the opponent times
+  // out or forfeits mid-series — MTGA awards the match without playing a decisive game).
+  let matchResult = computeMatchResult(g1, g2, g3);
+  if (matchResult === null) {
+    const matchScopeEntry = resultList.find((r) => r['scope'] === 'MatchScope_Match');
+    const matchWinningTeamId = matchScopeEntry?.['winningTeamId'];
+    if (typeof matchWinningTeamId === 'number') {
+      matchResult = matchWinningTeamId === localTeamId ? 'Win' : 'Loss';
+    }
+  }
+
   matchMap.set(matchId, {
     ...existing,
     game1: g1,
     game2: g2,
     game3: g3,
-    matchResult: computeMatchResult(g1, g2, g3),
+    matchResult,
   });
 }
 
