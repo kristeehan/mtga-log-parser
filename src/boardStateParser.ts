@@ -1,4 +1,5 @@
 import type { BoardCard, TurnSnapshot } from './types/boardState.js';
+import type { TurnDrawRecord } from './types/drawTracking.js';
 
 interface RawGameObject {
   instanceId: number;
@@ -320,6 +321,7 @@ export interface BoardStateCollector {
     currentMatchId: string | null,
   ): void;
   snapshots(): TurnSnapshot[];
+  drawRecords(): TurnDrawRecord[];
   rawState(matchId: string, gameNumber: number): RawStateDebug | null;
 }
 
@@ -338,6 +340,8 @@ export function createBoardStateCollector(): BoardStateCollector {
   // Track current game number per match — many delta messages omit gameInfo entirely
   const currentGameNumbers = new Map<string, number>();
   const completed: TurnSnapshot[] = [];
+  // Per-turn draw records: keyed by `matchId:gameNumber:turnNumber`
+  const drawsByTurnKey = new Map<string, TurnDrawRecord>();
 
   function getOrCreateState(matchId: string, gameNumber: number): LiveGameState {
     const key = gameKey(matchId, gameNumber);
@@ -518,6 +522,37 @@ export function createBoardStateCollector(): BoardStateCollector {
         };
       }
 
+      // Process ZoneTransfer/Draw annotations to record which cards the local player drew.
+      // Annotations are processed after game objects are merged so that newly revealed
+      // hand cards (added in the same message) can be looked up by instanceId.
+      const rawAnnotations = gsm['annotations'] as Array<Record<string, unknown>> | undefined;
+      if (rawAnnotations && state.turnInfo?.turnNumber !== undefined) {
+        const turnNum = state.turnInfo.turnNumber;
+        for (const ann of rawAnnotations) {
+          if (turnNum === 0) continue;
+          if (ann['type'] !== 'AnnotationType_ZoneTransfer') continue;
+          if (ann['category'] !== 'Draw') continue;
+
+          const affectedIds = ann['affectedIds'];
+          if (!Array.isArray(affectedIds)) continue;
+
+          for (const affectedId of affectedIds) {
+            if (typeof affectedId !== 'number') continue;
+            const go = state.gameObjects.get(affectedId);
+            // Only track draws where the grpId is resolvable (local player's cards are visible)
+            if (!go?.grpId) continue;
+            // Confirm the card is owned by the local player (opponent hand is hidden)
+            if (go.ownerSeatId !== undefined && go.ownerSeatId !== state.localSeatId) continue;
+
+            const key = `${currentMatchId}:${gameNumber}:${turnNum}`;
+            if (!drawsByTurnKey.has(key)) {
+              drawsByTurnKey.set(key, { matchId: currentMatchId, gameNumber, turnNumber: turnNum, drawnGrpIds: [] });
+            }
+            drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
+          }
+        }
+      }
+
       if (!state.turnInfo?.turnNumber) continue;
 
       const currentTurn = state.turnInfo.turnNumber;
@@ -586,5 +621,10 @@ export function createBoardStateCollector(): BoardStateCollector {
     };
   }
 
-  return { collect, snapshots: () => completed, rawState };
+  return {
+    collect,
+    snapshots: () => completed,
+    drawRecords: () => Array.from(drawsByTurnKey.values()),
+    rawState,
+  };
 }

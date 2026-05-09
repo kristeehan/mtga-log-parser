@@ -3,6 +3,7 @@ import { join } from 'path';
 import type { Match, GameResult, MatchResult } from './types/match.js';
 import type { GameSnapshot } from './types/gameData.js';
 import type { TurnSnapshot } from './types/boardState.js';
+import type { TurnDrawRecord } from './types/drawTracking.js';
 import { createGameDataCollector } from './gameDataParser.js';
 import { createBoardStateCollector, type BoardStateCollector } from './boardStateParser.js';
 
@@ -57,6 +58,8 @@ export interface ParseResult {
   opponentGrpIds: Map<string, Set<number>>;
   gameSnapshots: GameSnapshot[];
   boardSnapshots: TurnSnapshot[];
+  /** Per-turn records of grpIds drawn by the local player. Only turns where at least one draw was tracked are included. */
+  turnDrawRecords: TurnDrawRecord[];
   myDeckListMap: Map<string, DeckList>;
   boardStateCollector: BoardStateCollector;
   deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
@@ -601,12 +604,14 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
   });
 
   const boardSnapshots = boardStateCollector.snapshots().filter((s) => matchIds.has(s.matchId));
+  const turnDrawRecords = boardStateCollector.drawRecords().filter((r) => matchIds.has(r.matchId));
 
   return {
     matches,
     opponentGrpIds,
     gameSnapshots,
     boardSnapshots,
+    turnDrawRecords,
     myDeckListMap,
     boardStateCollector,
     deckUsages,

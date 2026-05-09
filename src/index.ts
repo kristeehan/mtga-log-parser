@@ -19,6 +19,9 @@ export type { GameSnapshot } from './types/gameData.js';
 // Board state types
 export type { BoardCard, TurnSnapshot } from './types/boardState.js';
 
+// Draw tracking types
+export type { TurnDrawRecord } from './types/drawTracking.js';
+
 // Collector interfaces
 export type { GameDataCollector } from './gameDataParser.js';
 export type { BoardStateCollector, RawStateDebug } from './boardStateParser.js';

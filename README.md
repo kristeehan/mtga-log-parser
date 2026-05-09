@@ -107,7 +107,7 @@ Returns a count of matches played against each opponent client platform. The pla
 ```ts
 import { parseAllLogs, opponentsByPlatform } from 'mtga-log-parser';
 
-const { matches } = await parseAllLogs({ logDir: '...' });
+const matches = await parseAllLogs({ logDir: '...' });
 console.log(opponentsByPlatform(matches));
 // { Mac: 42, Windows: 18, iOS: 7, Android: 3 }
 ```
@@ -153,6 +153,3 @@ This package is **ESM-only** (`"type": "module"`). It cannot be `require()`d dir
 const { parseAllLogs } = await import('mtga-log-parser');
 ```
 
-## Platform note
-
-Local player detection originally checked `platformId === 'Mac'` first, because the program was generated on a Mac. This has been corrected.
