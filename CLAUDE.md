@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build      # compile TypeScript to dist/ (tsc -p tsconfig.build.json)
 npm run dev        # watch mode
+npm test           # run Vitest test suite (src/__tests__/)
 npm publish        # runs prepublishOnly (build) then publishes to npm
 ```
 
-There are no tests or linter configured — `npm run build` (type-check + emit) is the only verification step.
+There is no linter configured. `npm run build` (type-check + emit) and `npm test` are the two verification steps.
 
 ## Architecture
 
@@ -23,9 +24,12 @@ UTC_Log - *.log files
         ↓
   parseAllLogsWithDebug  (src/logParser.ts)
         ↓ feeds lines into
-  parseLines  →  handleMatchStart / handleMatchEnd / tryExtractGameState
-                 createGameDataCollector   (src/gameDataParser.ts)
-                 createBoardStateCollector (src/boardStateParser.ts)
+  parseLinesAndAddToSession
+    ├─ handleParseDeck            → session.deckByEvent / pendingDeckName
+    ├─ handleParseMatchStateChange → handleMatchStart / handleMatchEnd
+    └─ handleParseGREEventLine    → tryExtractGameState
+                                    createGameDataCollector   (src/gameDataParser.ts)
+                                    createBoardStateCollector (src/boardStateParser.ts)
         ↓
   ParseResult  { matches, gameSnapshots, boardSnapshots, deckUsages, … }
 ```
@@ -55,7 +59,7 @@ UTC_Log - *.log files
 
 ### Sub-collectors
 
-`createGameDataCollector` and `createBoardStateCollector` are factory functions that return a `collect(raw, matchId, ...)` method and a `snapshots()` method. They process `greToClientEvent / GameStateMessage` payloads independently and are called from `parseLines` after `tryExtractGameState`.
+`createGameDataCollector` and `createBoardStateCollector` are factory functions that return a `collect(raw, matchId, ...)` method and a `snapshots()` method. They process `greToClientEvent / GameStateMessage` payloads independently and are called from `handleParseGREEventLine` after `tryExtractGameState`.
 
 ### ESM-only
 
