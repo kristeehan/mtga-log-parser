@@ -1,16 +1,4 @@
-import type { GameSnapshot } from './types/gameData.js';
-
-// Per-game mutable state accumulated before we see GameStage_GameOver
-interface SnapshotBuilder {
-  myMulligan: number;
-  oppMulligan: number;
-  // Last life totals seen in any non-GameOver message, used as fallback when
-  // GameStage_GameOver omits lifeTotal (common on life-total deaths).
-  lastMyLife: number | null;
-  lastOppLife: number | null;
-  openingHandCaptured: boolean;
-  openingHandGrpIds: number[];
-}
+import type { GameSnapshot, GameDataCollector, SnapshotBuilder } from './types.js';
 
 function gameKey(matchId: string, gameNumber: number): string {
   return `${matchId}:${gameNumber}`;
@@ -22,16 +10,6 @@ function parseEndReason(reason: string): GameSnapshot['gameEndReason'] {
   if (reason === 'ResultReason_Timeout') return 'timeout';
   if (reason === 'ResultReason_Draw') return 'draw';
   return 'unknown';
-}
-
-export interface GameDataCollector {
-  // Call this for every parsed GRE greToClientEvent object that contains GameStateMessages
-  collect(
-    obj: Record<string, unknown>,
-    currentMatchId: string | null,
-    localTeamIdMap: Map<string, number>,
-  ): void;
-  snapshots(): GameSnapshot[];
 }
 
 export function createGameDataCollector(): GameDataCollector {

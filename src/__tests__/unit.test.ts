@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { computeMatchResult, parseLogDate, extractDeckInfo, MatchFilters } from '../logParser.js';
+import { computeMatchResult, parseLogDate } from '../utils.js';
+import { extractDeckInfo, MatchFilters } from '../logParser.js';
 import { opponentsByPlatform } from '../analytics.js';
-import type { Match } from '../types/match.js';
+import type { Match } from '../types.js';
 
 function makeMatch(partial: Partial<Match> = {}): Match {
   return {

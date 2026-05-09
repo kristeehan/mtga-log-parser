@@ -1,57 +1,19 @@
-import type { BoardCard, TurnSnapshot } from './types/boardState.js';
-import type { TurnDrawRecord } from './types/drawTracking.js';
-
-interface RawGameObject {
-  instanceId: number;
-  grpId?: number;
-  ownerSeatId?: number;
-  controllerSeatId?: number;
-  type?: string;
-  power?: number;
-  toughness?: number;
-  zoneId?: number;
-  isTapped?: boolean;
-  counters?: Record<string, number>;
-}
-
-interface RawZone {
-  zoneId: number;
-  type?: string;
-  ownerSeatId?: number;
-  objectInstanceIds?: number[];
-}
-
-interface RawPlayer {
-  systemSeatNumber?: number;
-  lifeTotal?: number;
-  turnNumber?: number;
-}
-
-interface RawTurnInfo {
-  turnNumber?: number;
-  activePlayer?: number;
-  phase?: string;
-  step?: string;
-}
-
-interface LiveGameState {
-  gameObjects: Map<number, RawGameObject>;
-  zones: Map<number, RawZone>;
-  players: Map<number, RawPlayer>;
-  turnInfo: RawTurnInfo | null;
-  gameNumber: number | null;
-  localSeatId: number | null;
-  // MTGA sometimes advances turnNumber before all combat phases are logged.
-  // Track the turn and active player at BeginCombat so continuation phases
-  // (DeclareAttackers → CombatDamage → EndCombat) are attributed to the correct turn.
-  activeCombatTurn: number | null;
-  activeCombatPlayer: number | undefined;
-}
+import type {
+  BoardCard,
+  TurnSnapshot,
+  TurnDrawRecord,
+  RawGameObject,
+  RawZone,
+  RawPlayer,
+  LiveGameState,
+  RawStateDebug,
+  BoardStateCollector,
+  CollectorState,
+} from './types.js';
 
 function gameKey(matchId: string, gameNumber: number): string {
   return `${matchId}:${gameNumber}`;
 }
-
 
 function toGameObject(raw: Record<string, unknown>): RawGameObject | null {
   const instanceId = raw['instanceId'];
@@ -294,34 +256,6 @@ function buildSnapshot(
   };
 }
 
-export interface RawStateDebug {
-  gameNumber: number | null;
-  localSeatId: number | null;
-  turnInfo: RawTurnInfo | null;
-  zones: Array<{ zoneId: number; type?: string; ownerSeatId?: number; objectCount: number }>;
-  gameObjects: Array<{ instanceId: number; grpId?: number; zoneId?: number; type?: string; ownerSeatId?: number; controllerSeatId?: number; isTapped: boolean }>;
-}
-
-export interface BoardStateCollector {
-  collect(
-    obj: Record<string, unknown>,
-    currentMatchId: string | null,
-  ): void;
-  snapshots(): TurnSnapshot[];
-  drawRecords(): TurnDrawRecord[];
-  rawState(matchId: string, gameNumber: number): RawStateDebug | null;
-}
-
-interface CollectorState {
-  liveStates: Map<string, LiveGameState>;
-  lastTurnNumbers: Map<string, number>;
-  lastPhases: Map<string, string>;
-  lastEmittedLabel: Map<string, string>;
-  currentGameNumbers: Map<string, number>;
-  completed: TurnSnapshot[];
-  drawsByTurnKey: Map<string, TurnDrawRecord>;
-}
-
 function createCollectorState(): CollectorState {
   return {
     liveStates: new Map<string, LiveGameState>(),
@@ -357,19 +291,19 @@ export function createBoardStateCollector(): BoardStateCollector {
 
   function tryEmit(
     matchId: string,
-    state: LiveGameState,
+    liveState: LiveGameState,
     phaseLabel: string,
     capturedTurnNumber: number,
     capturedActivePlayer: number | undefined,
   ): void {
-    if (state.gameNumber === null) return;
-    const key = `${gameKey(matchId, state.gameNumber)}:${capturedTurnNumber}`;
+    if (liveState.gameNumber === null) return;
+    const key = `${gameKey(matchId, liveState.gameNumber)}:${capturedTurnNumber}`;
     // Skip consecutive duplicates — pendingEmits already deduplicates within a batch;
     // this catches the rare case of MTGA re-broadcasting the same phase in a later batch.
     if (lastEmittedLabel.get(key) === phaseLabel) return;
     lastEmittedLabel.set(key, phaseLabel);
 
-    const snapshot = buildSnapshot(matchId, state, phaseLabel, capturedTurnNumber, capturedActivePlayer);
+    const snapshot = buildSnapshot(matchId, liveState, phaseLabel, capturedTurnNumber, capturedActivePlayer);
     if (snapshot) completed.push(snapshot);
   }
 

@@ -1,4 +1,4 @@
-import type { Match } from './types/match.js';
+import type { Match } from './types.js';
 
 /**
  * Returns a count of matches played against each opponent platform.
