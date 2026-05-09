@@ -5,7 +5,7 @@ import type { GameSnapshot } from './types/gameData.js';
 import type { TurnSnapshot } from './types/boardState.js';
 import type { TurnDrawRecord } from './types/drawTracking.js';
 import { createGameDataCollector } from './gameDataParser.js';
-import { createBoardStateCollector, type BoardStateCollector } from './boardStateParser.js';
+import { createBoardStateCollector, type RawStateDebug } from './boardStateParser.js';
 
 export interface ParseConfig {
   /** Directory containing "UTC_Log - *.log" files */
@@ -61,8 +61,9 @@ export interface ParseResult {
   /** Per-turn records of grpIds drawn by the local player. Only turns where at least one draw was tracked are included. */
   turnDrawRecords: TurnDrawRecord[];
   myDeckListMap: Map<string, DeckList>;
-  boardStateCollector: BoardStateCollector;
   deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
+  /** Returns raw accumulated zone/object state for a match+game — useful for diagnosing unexpected board snapshots. */
+  debugBoardState: (matchId: string, gameNumber: number) => RawStateDebug | null;
 }
 
 // Inlined from src/lib/stats.ts — kept here to avoid a runtime dependency
@@ -108,18 +109,38 @@ function tryParseJSON(line: string): unknown {
   }
 }
 
+function toEntries(arr: Array<Record<string, unknown>> | undefined): CardEntry[] {
+  return (arr ?? []).flatMap((card) => {
+    const cardId = card['cardId'];
+    const quantity = card['quantity'];
+    if (typeof cardId !== 'number' || typeof quantity !== 'number') return [];
+    return [{ cardId, quantity }];
+  });
+}
+
+// Populate deckByEvent from a bulk Courses dump (emitted at session start).
+function applyCoursesPayload(
+  courses: unknown[],
+  deckByEvent: Map<string, { name: string; deck: DeckList }>,
+): void {
+  for (const course of courses) {
+    const c = course as Record<string, unknown>;
+    const eventName = c['InternalEventName'];
+    const summary = c['CourseDeckSummary'] as Record<string, unknown> | undefined;
+    const courseDeck = c['CourseDeck'] as Record<string, unknown> | undefined;
+    if (typeof eventName !== 'string' || !summary) continue;
+    const name = summary['Name'];
+    if (typeof name !== 'string' || name.startsWith('?=?')) continue;
+    const rawMain = courseDeck?.['MainDeck'] as Array<Record<string, unknown>> | undefined;
+    const rawSide = courseDeck?.['Sideboard'] as Array<Record<string, unknown>> | undefined;
+    deckByEvent.set(eventName, { name, deck: { main: toEntries(rawMain), sideboard: toEntries(rawSide) } });
+  }
+}
+
 // Extract deck name and full card list from an EventSetDeckV2 response line/object.
 // The event name varies by queue (Traditional_Ladder, Play, Constructed_BestOf3, etc.) — we
 // detect by structure, not by event name.
 export function extractDeckInfo(obj: Record<string, unknown>): { name: string; deck: DeckList } | null {
-  const toEntries = (arr: Array<Record<string, unknown>> | undefined): CardEntry[] =>
-    (arr ?? []).flatMap((c) => {
-      const cardId = c['cardId'];
-      const quantity = c['quantity'];
-      if (typeof cardId !== 'number' || typeof quantity !== 'number') return [];
-      return [{ cardId, quantity }];
-    });
-
   // Direct structure: { InternalEventName, CourseDeckSummary: { Name }, CourseDeck: { MainDeck, Sideboard } }
   const summary = obj['CourseDeckSummary'] as Record<string, unknown> | undefined;
   if (summary && typeof summary['Name'] === 'string') {
@@ -376,51 +397,22 @@ interface ParseSession {
   boardStateCollector: ReturnType<typeof createBoardStateCollector>,
   matchFilter: MatchFilter,
 }
-function handleParseDeck(line:string, session: Session) {
-   const obj = tryParseJSON(line);
-      if (obj && typeof obj === 'object') {
-        const raw = obj as Record<string, unknown>;
+function handleParseDeck(line: string, session: Session) {
+  const obj = tryParseJSON(line);
+  if (!obj || typeof obj !== 'object') return;
+  const raw = obj as Record<string, unknown>;
 
-        // Bulk Courses dump: {"Courses": [{InternalEventName, CourseDeckSummary, CourseDeck}...]}
-        // This is emitted at session start and contains the current deck for every event queue.
-        const courses = raw['Courses'];
-        if (Array.isArray(courses)) {
-          const toEntries = (arr: Array<Record<string, unknown>> | undefined): CardEntry[] =>
-            (arr ?? []).flatMap((c) => {
-              const cardId = c['cardId'];
-              const quantity = c['quantity'];
-              if (typeof cardId !== 'number' || typeof quantity !== 'number') return [];
-              return [{ cardId, quantity }];
-            });
+  // Bulk Courses dump: emitted at session start, one entry per event queue
+  if (Array.isArray(raw['Courses'])) applyCoursesPayload(raw['Courses'], session.deckByEvent);
 
-          for (const course of courses) {
-            const c = course as Record<string, unknown>;
-            const eventName = c['InternalEventName'];
-            const summary = c['CourseDeckSummary'] as Record<string, unknown> | undefined;
-            const courseDeck = c['CourseDeck'] as Record<string, unknown> | undefined;
-            if (typeof eventName !== 'string' || !summary) continue;
-            const name = summary['Name'];
-            if (typeof name !== 'string' || name.startsWith('?=?')) continue;
-            const rawMain = courseDeck?.['MainDeck'] as Array<Record<string, unknown>> | undefined;
-            const rawSide = courseDeck?.['Sideboard'] as Array<Record<string, unknown>> | undefined;
-            session.deckByEvent.set(eventName, {
-              name,
-              deck: { main: toEntries(rawMain), sideboard: toEntries(rawSide) },
-            });
-          }
-        }
-
-        // Individual EventSetDeckV2 / single-course CourseDeckSummary event
-        const info = extractDeckInfo(raw);
-        if (info) {
-          session.pendingDeckName = info.name;
-          session.pendingDeckList = info.deck;
-          const eventName = raw['InternalEventName'];
-          if (typeof eventName === 'string') {
-            session.deckByEvent.set(eventName, { name: info.name, deck: info.deck });
-          }
-        }
-      }
+  // Individual EventSetDeckV2 / single-course CourseDeckSummary event
+  const info = extractDeckInfo(raw);
+  if (info) {
+    session.pendingDeckName = info.name;
+    session.pendingDeckList = info.deck;
+    const eventName = raw['InternalEventName'];
+    if (typeof eventName === 'string') session.deckByEvent.set(eventName, { name: info.name, deck: info.deck });
+  }
 }
 
 function handleParseMatchStateChange(line: string, session: Session, ps: ParseSession) {
@@ -613,7 +605,7 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
     boardSnapshots,
     turnDrawRecords,
     myDeckListMap,
-    boardStateCollector,
     deckUsages,
+    debugBoardState: (matchId, gameNumber) => boardStateCollector.rawState(matchId, gameNumber),
   };
 }

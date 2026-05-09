@@ -158,21 +158,48 @@ function buildSnapshot(
   const { gameObjects, zones, players, turnInfo, gameNumber, localSeatId } = state;
 
   const turnNumber = capturedTurnNumber ?? turnInfo?.turnNumber;
-  if (turnNumber === undefined || gameNumber === null || localSeatId === null) {
-    return null;
+
+  function* zoneObjects(zone: RawZone): Generator<RawGameObject | undefined> {
+    if (zone.objectInstanceIds) {
+      for (const id of zone.objectInstanceIds) yield gameObjects.get(id);
+    } else {
+      for (const obj of gameObjects.values()) {
+        if (obj.zoneId === zone.zoneId) yield obj;
+      }
+    }
   }
 
-  const activePlayerSeat = capturedActivePlayer ?? turnInfo?.activePlayer;
-  const activePlayerIsMe = activePlayerSeat === localSeatId;
+  function* parseObjects(
+    objects: Iterable<RawGameObject | undefined>,
+    seen: Set<number>,
+    isBattlefield: boolean,
+    ownerFilter: 'mine' | 'opp' | 'any',
+    cardTypeFilter: boolean,
+  ): Generator<BoardCard> {
+    for (const obj of objects) {
+      if (!obj || !obj.grpId) continue;
+      if (seen.has(obj.instanceId)) continue;
 
-  // Life totals
-  let myLife = 20;
-  let oppLife = 20;
-  for (const p of players.values()) {
-    if (p.systemSeatNumber === localSeatId) {
-      myLife = p.lifeTotal ?? 20;
-    } else {
-      oppLife = p.lifeTotal ?? 20;
+      if (cardTypeFilter) {
+        const allowed = isBattlefield
+          ? obj.type === 'GameObjectType_Card' || obj.type === 'GameObjectType_Token'
+          : obj.type === 'GameObjectType_Card';
+        if (!allowed) continue;
+      }
+
+      if (isBattlefield && ownerFilter !== 'any') {
+        const controller = obj.controllerSeatId ?? obj.ownerSeatId;
+        if (ownerFilter === 'mine' && controller !== undefined && controller !== localSeatId) continue;
+        if (ownerFilter === 'opp'  && controller !== undefined && controller === localSeatId) continue;
+      }
+
+      if (!isBattlefield && ownerFilter !== 'any' && obj.ownerSeatId !== undefined) {
+        if (ownerFilter === 'mine' && obj.ownerSeatId !== localSeatId) continue;
+        if (ownerFilter === 'opp'  && obj.ownerSeatId === localSeatId) continue;
+      }
+
+      seen.add(obj.instanceId);
+      yield toBoardCard(obj);
     }
   }
 
@@ -198,69 +225,29 @@ function buildSnapshot(
         if (ownerFilter === 'opp' && zone.ownerSeatId === localSeatId) continue;
       }
 
-      if (zone.objectInstanceIds) {
-        // Primary path: use zone's authoritative instance list
-        for (const instanceId of zone.objectInstanceIds) {
-          if (seen.has(instanceId)) continue;
-          const obj = gameObjects.get(instanceId);
-          if (!obj || !obj.grpId) continue;
-
-          if (cardTypeFilter) {
-            const allowed = isBattlefield
-              ? obj.type === 'GameObjectType_Card' || obj.type === 'GameObjectType_Token'
-              : obj.type === 'GameObjectType_Card';
-            if (!allowed) continue;
-          }
-
-          // For battlefield: filter by controllerSeatId (handles stolen permanents)
-          if (isBattlefield && ownerFilter !== 'any') {
-            const controller = obj.controllerSeatId ?? obj.ownerSeatId;
-            if (ownerFilter === 'mine' && controller !== undefined && controller !== localSeatId) continue;
-            if (ownerFilter === 'opp' && controller !== undefined && controller === localSeatId) continue;
-          }
-
-          // For hand/graveyard: if zone.ownerSeatId was absent, fall back to per-object ownerSeatId.
-          // Also acts as a belt-and-suspenders check even when zone.ownerSeatId is set.
-          if (!isBattlefield && ownerFilter !== 'any' && obj.ownerSeatId !== undefined) {
-            if (ownerFilter === 'mine' && obj.ownerSeatId !== localSeatId) continue;
-            if (ownerFilter === 'opp' && obj.ownerSeatId === localSeatId) continue;
-          }
-
-          seen.add(instanceId);
-          cards.push(toBoardCard(obj));
-        }
-      } else {
-        // Fallback: zone has no objectInstanceIds, use obj.zoneId
-        for (const obj of gameObjects.values()) {
-          if (obj.zoneId !== zone.zoneId) continue;
-          if (seen.has(obj.instanceId)) continue;
-          if (!obj.grpId) continue;
-
-          if (cardTypeFilter) {
-            const allowed = isBattlefield
-              ? obj.type === 'GameObjectType_Card' || obj.type === 'GameObjectType_Token'
-              : obj.type === 'GameObjectType_Card';
-            if (!allowed) continue;
-          }
-
-          if (isBattlefield && ownerFilter !== 'any') {
-            const controller = obj.controllerSeatId ?? obj.ownerSeatId;
-            if (ownerFilter === 'mine' && controller !== undefined && controller !== localSeatId) continue;
-            if (ownerFilter === 'opp' && controller !== undefined && controller === localSeatId) continue;
-          }
-
-          // For hand/graveyard in fallback path: filter by ownerSeatId
-          if (!isBattlefield && ownerFilter !== 'any' && obj.ownerSeatId !== undefined) {
-            if (ownerFilter === 'mine' && obj.ownerSeatId !== localSeatId) continue;
-            if (ownerFilter === 'opp' && obj.ownerSeatId === localSeatId) continue;
-          }
-
-          seen.add(obj.instanceId);
-          cards.push(toBoardCard(obj));
-        }
+      for (const card of parseObjects(zoneObjects(zone), seen, isBattlefield, ownerFilter, cardTypeFilter)) {
+        cards.push(card);
       }
     }
     return cards;
+  }
+
+  if (turnNumber === undefined || gameNumber === null || localSeatId === null) {
+    return null;
+  }
+
+  const activePlayerSeat = capturedActivePlayer ?? turnInfo?.activePlayer;
+  const activePlayerIsMe = activePlayerSeat === localSeatId;
+
+  // Life totals
+  let myLife = 20;
+  let oppLife = 20;
+  for (const p of players.values()) {
+    if (p.systemSeatNumber === localSeatId) {
+      myLife = p.lifeTotal ?? 20;
+    } else {
+      oppLife = p.lifeTotal ?? 20;
+    }
   }
 
   // Opponent hand count — cards are face-down (grpId=0/undefined) so getZoneObjects skips them.
@@ -325,23 +312,31 @@ export interface BoardStateCollector {
   rawState(matchId: string, gameNumber: number): RawStateDebug | null;
 }
 
+interface CollectorState {
+  liveStates: Map<string, LiveGameState>;
+  lastTurnNumbers: Map<string, number>;
+  lastPhases: Map<string, string>;
+  lastEmittedLabel: Map<string, string>;
+  currentGameNumbers: Map<string, number>;
+  completed: TurnSnapshot[];
+  drawsByTurnKey: Map<string, TurnDrawRecord>;
+}
+
+function createCollectorState(): CollectorState {
+  return {
+    liveStates: new Map<string, LiveGameState>(),
+    lastTurnNumbers: new Map<string, number>(),
+    lastPhases: new Map<string, string>(),
+    lastEmittedLabel: new Map<string, string>(),
+    currentGameNumbers: new Map<string, number>(),
+    completed: [],
+    drawsByTurnKey: new Map<string, TurnDrawRecord>(),
+  };
+}
+
 export function createBoardStateCollector(): BoardStateCollector {
-  // Per-match per-game live state
-  const liveStates = new Map<string, LiveGameState>();
-  // Track last turn number per game to detect new turns
-  const lastTurnNumbers = new Map<string, number>();
-  // Track last emitted phase/step label per game — emit whenever turn or label changes
-  const lastPhases = new Map<string, string>();
-  // Track the last label emitted per (game, turn) for consecutive-duplicate suppression.
-  // Keyed by `gameKey:turnNum`. Using last-label rather than an all-time set allows the
-  // same label (e.g. Phase_Main) to appear again after an intervening phase (e.g. combat),
-  // which is how Main Phase 2 is captured.
-  const lastEmittedLabel = new Map<string, string>();
-  // Track current game number per match — many delta messages omit gameInfo entirely
-  const currentGameNumbers = new Map<string, number>();
-  const completed: TurnSnapshot[] = [];
-  // Per-turn draw records: keyed by `matchId:gameNumber:turnNumber`
-  const drawsByTurnKey = new Map<string, TurnDrawRecord>();
+  const collectorState = createCollectorState();
+  const { liveStates, lastTurnNumbers, lastPhases, lastEmittedLabel, currentGameNumbers, completed, drawsByTurnKey } = collectorState;
 
   function getOrCreateState(matchId: string, gameNumber: number): LiveGameState {
     const key = gameKey(matchId, gameNumber);

@@ -123,13 +123,14 @@ import { parseAllLogsWithDebug } from 'mtga-log-parser';
 
 const result = await parseAllLogsWithDebug({ logDir: '...' });
 
-result.matches;          // Match[] — completed matches (all formats by default)
-result.gameSnapshots;    // GameSnapshot[] — one per game (life totals, mulligans, turn count)
-result.boardSnapshots;   // TurnSnapshot[] — per-phase board state for every turn
-result.myDeckListMap;       // Map<matchId, DeckList> — grpId card lists
-result.deckUsages;          // Map<deckName, { deck, timestamp }> — most recent list per deck name
-result.opponentGrpIds;      // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
-result.boardStateCollector; // BoardStateCollector — call .rawState(matchId, gameNum) for raw zone/object debug data
+result.matches;           // Match[] — completed matches (all formats by default)
+result.gameSnapshots;     // GameSnapshot[] — one per game (life totals, mulligans, turn count)
+result.boardSnapshots;    // TurnSnapshot[] — per-phase board state for every turn
+result.turnDrawRecords;   // TurnDrawRecord[] — grpIds drawn by local player per turn
+result.myDeckListMap;     // Map<matchId, DeckList> — grpId card lists
+result.deckUsages;        // Map<deckName, { deck, timestamp }> — most recent list per deck name
+result.opponentGrpIds;    // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
+result.debugBoardState(matchId, gameNumber); // RawStateDebug | null — raw zone/object state for diagnosing board snapshots
 ```
 
 ## `ParseConfig` reference
