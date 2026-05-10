@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeMatchResult, parseLogDate } from '../utils.js';
-import { extractDeckInfo, MatchFilters } from '../logParser.js';
+import { MatchFilters } from '../logParser.js';
+import { extractDeckInfo } from '../deckParser.js';
 import { opponentsByPlatform } from '../analytics.js';
 import type { Match } from '../types.js';
 

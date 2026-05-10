@@ -14,7 +14,7 @@ All interfaces and type aliases from every file consolidated into a single `src/
 
 ---
 
-## 1. Extract `src/deckParser.ts` — deck resolution subsystem
+## ~~1. Extract `src/deckParser.ts` — deck resolution subsystem~~ (Done)
 
 **Problem:** `applyCoursesPayload`, `extractDeckInfo`, and `handleParseDeck` form a self-contained subsystem — all three exist solely to populate `session.deckByEvent` and `session.pendingDeckName`. `extractDeckInfo` is exported for tests, which looks out of place in the same file as `parseAllLogs`.
 
