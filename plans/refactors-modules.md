@@ -35,7 +35,7 @@ src/deckParser.ts
 
 ---
 
-## 2. Extract `src/matchHandler.ts` — match start/end handlers
+## ~~2. Extract `src/matchHandler.ts` — match start/end handlers~~ (Done)
 
 **Problem:** `handleMatchStart`, `handleMatchEnd`, and `tryExtractGameState` are ~200 lines of match state machine logic embedded in `logParser.ts`. They're called from only two places (`handleParseMatchStateChange` and `handleParseGREEventLine`) but their implementations are buried far from those call sites.
 
