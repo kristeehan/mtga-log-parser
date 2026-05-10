@@ -365,8 +365,16 @@ export function createBoardStateCollector(): BoardStateCollector {
         const turnNum = state.turnInfo.turnNumber;
         for (const ann of rawAnnotations) {
           if (turnNum === 0) continue;
-          if (ann['type'] !== 'AnnotationType_ZoneTransfer') continue;
-          if (ann['category'] !== 'Draw') continue;
+          const annType = ann['type'];
+          const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
+            || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
+          if (!isZoneTransfer) continue;
+          const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+          const categoryValue = details?.find((d) => d['key'] === 'category');
+          const category = Array.isArray(categoryValue?.['valueString'])
+            ? (categoryValue!['valueString'] as string[])[0]
+            : categoryValue?.['valueString'];
+          if (category !== 'Draw') continue;
 
           const affectedIds = ann['affectedIds'];
           if (!Array.isArray(affectedIds)) continue;
