@@ -79,7 +79,7 @@ function greDrawLine(opts: {
   const annotations = draws.map((d, i) => ({
     id: 1000 + i,
     type: 'AnnotationType_ZoneTransfer',
-    category: 'Draw',
+    details: [{ key: 'category', valueString: ['Draw'] }],
     affectedIds: [d.instanceId],
   }));
 
@@ -141,7 +141,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId: 101, grpId: 5001, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card', zoneId: 10 },
               ],
               annotations: [
-                { id: 1, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [101] },
+                { id: 1, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [101] },
               ],
             },
           },
@@ -179,8 +179,8 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId: 202, grpId: 6002, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card' },
               ],
               annotations: [
-                { id: 1, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [201] },
-                { id: 2, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [202] },
+                { id: 1, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [201] },
+                { id: 2, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [202] },
               ],
             },
           },
@@ -212,7 +212,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId, grpId, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card' },
               ],
               annotations: [
-                { id: instanceId, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [instanceId] },
+                { id: instanceId, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [instanceId] },
               ],
             },
           },
@@ -246,7 +246,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId, grpId, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card' },
               ],
               annotations: [
-                { id: instanceId, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [instanceId] },
+                { id: instanceId, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [instanceId] },
               ],
             },
           },
@@ -286,7 +286,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId: 501, ownerSeatId: 2, controllerSeatId: 2, type: 'GameObjectType_Card' },
               ],
               annotations: [
-                { id: 1, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [501] },
+                { id: 1, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [501] },
               ],
             },
           },
@@ -320,7 +320,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId, grpId, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card', zoneId: 10 },
               ],
               annotations: [
-                { id: instanceId, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [instanceId] },
+                { id: instanceId, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [instanceId] },
               ],
             },
           },
@@ -357,9 +357,9 @@ describe('createBoardStateCollector draw tracking', () => {
               ],
               annotations: [
                 // Wrong type
-                { id: 1, type: 'AnnotationType_ResolutionComplete', category: 'Draw', affectedIds: [601] },
+                { id: 1, type: 'AnnotationType_ResolutionComplete', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [601] },
                 // Right type, wrong category
-                { id: 2, type: 'AnnotationType_ZoneTransfer', category: 'CastSpell', affectedIds: [601] },
+                { id: 2, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['CastSpell'] }], affectedIds: [601] },
               ],
             },
           },
@@ -388,7 +388,7 @@ describe('createBoardStateCollector draw tracking', () => {
               // No gameObjects — instanceId 701 is not in the map
               gameObjects: [],
               annotations: [
-                { id: 1, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [701] },
+                { id: 1, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [701] },
               ],
             },
           },
@@ -418,7 +418,7 @@ describe('createBoardStateCollector draw tracking', () => {
                 { instanceId, grpId, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card' },
               ],
               annotations: [
-                { id: instanceId, type: 'AnnotationType_ZoneTransfer', category: 'Draw', affectedIds: [instanceId] },
+                { id: instanceId, type: 'AnnotationType_ZoneTransfer', details: [{ key: 'category', valueString: ['Draw'] }], affectedIds: [instanceId] },
               ],
             },
           },
