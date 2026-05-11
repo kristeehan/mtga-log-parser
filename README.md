@@ -141,6 +141,15 @@ result.debugBoardState(matchId, gameNumber); // RawStateDebug | null — raw zon
 | `matchFilter` | `(eventId: string) => boolean` | No | Predicate to restrict which matches are included. Defaults to `MatchFilters.all`. Use `MatchFilters.bo3Constructed` to replicate pre-2.0 behavior. |
 | `resolveColors` | `(grpIds: number[]) => Promise<string>` | No | Async callback to derive opponent color string (e.g. `"WU"`) from card grpIds. If omitted, `match.opponentColors` will be `""`. |
 
+## Migrating from 2.x
+
+Version 3.0 removed `boardStateCollector` from `ParseResult`. Replace any usage:
+
+| 2.x | 3.x |
+|---|---|
+| `result.boardStateCollector.rawState(matchId, gameNum)` | `result.debugBoardState(matchId, gameNum)` |
+| `result.boardStateCollector.snapshots()` | `result.boardSnapshots` (already filtered to completed matches) |
+
 ## Migrating from 1.x
 
 Version 2.0 is format-agnostic by default. If you were relying on the implicit Bo3-only filter, add `matchFilter: MatchFilters.bo3Constructed` to your config to restore the previous behavior.

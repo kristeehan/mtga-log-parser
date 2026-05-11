@@ -13,6 +13,8 @@ npm publish        # runs prepublishOnly (build) then publishes to npm
 
 There is no linter configured. `npm run build` (type-check + emit) and `npm test` are the two verification steps.
 
+Before publishing, run `rm -rf dist && npm run build` to ensure no stale artifacts from deleted source files end up in the tarball.
+
 ## Architecture
 
 The library is a single-pass log parser with no runtime dependencies. All public API is re-exported from `src/index.ts`.
@@ -25,18 +27,36 @@ UTC_Log - *.log files
   parseAllLogsWithDebug  (src/logParser.ts)
         ↓ feeds lines into
   parseLinesAndAddToSession
-    ├─ handleParseDeck            → session.deckByEvent / pendingDeckName
-    ├─ handleParseMatchStateChange → handleMatchStart / handleMatchEnd
-    └─ handleParseGREEventLine    → tryExtractGameState
-                                    createGameDataCollector   (src/gameDataParser.ts)
-                                    createBoardStateCollector (src/boardStateParser.ts)
+    ├─ handleParseDeck  (src/deckParser.ts)
+    │    └─ → session.deckByEvent / pendingDeckName
+    ├─ handleParseMatchStateChange
+    │    ├─ handleMatchStart  (src/matchHandler.ts)
+    │    └─ handleMatchEnd    (src/matchHandler.ts)
+    └─ handleParseGREEventLine
+         ├─ tryExtractGameState  (src/matchHandler.ts)
+         ├─ gameDataCollector.collect   (src/gameDataParser.ts)
+         └─ boardStateCollector.collect (src/boardStateParser.ts)
         ↓
-  ParseResult  { matches, gameSnapshots, boardSnapshots, deckUsages, … }
+  ParseResult  { matches, gameSnapshots, boardSnapshots, turnDrawRecords, deckUsages, … }
 ```
+
+### Module map
+
+| File | Responsibility |
+|---|---|
+| `src/logParser.ts` | Entry points (`parseAllLogs`, `parseAllLogsWithDebug`), session wiring, line routing |
+| `src/types.ts` | Every interface and type alias in the codebase, all exported |
+| `src/utils.ts` | Pure utilities: `computeMatchResult`, `parseLogDate`, `tryParseJSON`, `toEntries` |
+| `src/deckParser.ts` | Deck resolution: `extractDeckInfo`, `applyCoursesPayload`, `handleParseDeck` |
+| `src/matchHandler.ts` | Match state machine: `handleMatchStart`, `handleMatchEnd`, `tryExtractGameState` |
+| `src/gameDataParser.ts` | `createGameDataCollector` — life totals, mulligans, game end reason |
+| `src/boardStateParser.ts` | `createBoardStateCollector` — per-phase board snapshots, draw tracking |
+| `src/rawGameObjects.ts` | GRE JSON → typed struct mapping: `toGameObject`, `mergeGameObject`, `toZone`, `toPlayer`, `toBoardCard`, `gameKey` |
+| `src/analytics.ts` | `opponentsByPlatform` |
 
 ### Key design decisions
 
-**Single-pass, event-driven.** `parseLines` scans every line for three sentinel strings (`EventSetDeckV2/CourseDeckSummary`, `matchGameRoomStateChangedEvent`, `greToClientEvent`) and only JSON-parses lines that match. State is accumulated in plain Maps passed by reference.
+**Single-pass, event-driven.** `parseLinesAndAddToSession` scans every line for three sentinel strings (`EventSetDeckV2/CourseDeckSummary`, `matchGameRoomStateChangedEvent`, `greToClientEvent`) and only JSON-parses lines that match. State is accumulated in plain Maps passed by reference.
 
 **Match gating via `matchFilter`.** `handleMatchStart` accepts a `(eventId: string) => boolean` predicate threaded down from `parseAllLogsWithDebug`. The `MatchFilters` export provides presets (`all`, `constructed`, `bo3Constructed`). The default is `MatchFilters.all` — no filtering.
 
@@ -46,20 +66,21 @@ UTC_Log - *.log files
 
 **`opponentColors` resolved in parallel.** After parsing, `resolveColors` is called once per match via `Promise.all`. The callback receives all `grpId`s seen on opponent-owned `GameObjectType_Card` objects.
 
-### Output types (src/types/)
+### All types in `src/types.ts`
+
+Every interface and type alias lives in `src/types.ts` and is exported from there. Source files import what they need from `./types.js`; `src/index.ts` re-exports the public subset. The key output types:
 
 - `Match` — one record per completed match; `game2`/`game3` are `null` for Bo1; includes `opponentPlatform` auto-captured from `reservedPlayers[].platformId`
 - `GameSnapshot` — life totals, mulligan counts, turn count, end reason; one per game
 - `TurnSnapshot` — full board state snapshot per phase; includes hand, battlefield, graveyard, stack for both players
+- `TurnDrawRecord` — grpIds drawn by the local player, one record per turn where a draw occurred
 - `DeckList` — `{ main: CardEntry[], sideboard: CardEntry[] }` where each entry is `{ cardId, quantity }`
-
-### Analytics (src/analytics.ts)
-
-`opponentsByPlatform(matches: Match[]): Record<string, number>` — aggregates matches by opponent platform string. Exported from `src/index.ts`.
 
 ### Sub-collectors
 
-`createGameDataCollector` and `createBoardStateCollector` are factory functions that return a `collect(raw, matchId, ...)` method and a `snapshots()` method. They process `greToClientEvent / GameStateMessage` payloads independently and are called from `handleParseGREEventLine` after `tryExtractGameState`.
+`createGameDataCollector` and `createBoardStateCollector` are factory functions that return a `collect(raw, matchId, ...)` method and a `snapshots()` method. They process `greToClientEvent / GameStateMessage` payloads independently and are called from `handleParseGREEventLine`.
+
+`boardStateCollector` also exposes `drawRecords()` (returns `TurnDrawRecord[]`) and `rawState(matchId, gameNumber)` (returns `RawStateDebug | null` for diagnosing unexpected board snapshots). `rawState` is surfaced on `ParseResult` as `debugBoardState(matchId, gameNumber)`.
 
 ### ESM-only
 
