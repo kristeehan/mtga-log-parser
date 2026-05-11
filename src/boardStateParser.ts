@@ -180,6 +180,27 @@ export function createBoardStateCollector(): BoardStateCollector {
   const collectorState = createCollectorState();
   const { liveStates, lastTurnNumbers, lastPhases, lastEmittedLabel, currentGameNumbers, completed, drawsByTurnKey, actionsByGameKey } = collectorState;
 
+  // Pending actions are scoped per-turn across collect() calls. MTGA frequently sends
+  // ZoneTransfer (CastSpell) and Targetted annotations in separate game state messages /
+  // GRE event batches. Keeping this map at collector scope means Pass 2 (Targetted) can
+  // find stubs created by Pass 1 (ZoneTransfer) even across separate collect() invocations.
+  // Key: gameKey(matchId, gameNumber) → { actions: Map<sourceInstanceId, GameAction>, turn: number }
+  const pendingActionsPerGame = new Map<string, {
+    actions: Map<number, GameAction>;
+    turn: number;
+  }>();
+
+  // Flush all pending actions for a game key into actionsByGameKey (no-target resolution).
+  function flushPendingActions(gk: string): void {
+    const entry = pendingActionsPerGame.get(gk);
+    if (!entry || entry.actions.size === 0) return;
+    if (!actionsByGameKey.has(gk)) actionsByGameKey.set(gk, []);
+    for (const action of entry.actions.values()) {
+      actionsByGameKey.get(gk)!.push(action);
+    }
+    entry.actions.clear();
+  }
+
   function getOrCreateState(matchId: string, gameNumber: number): LiveGameState {
     const key = gameKey(matchId, gameNumber);
     if (!liveStates.has(key)) {
@@ -399,9 +420,28 @@ export function createBoardStateCollector(): BoardStateCollector {
 
         // Process ZoneTransfer action annotations (CastSpell, ActivateAbility, TriggerAbility).
         // Two-pass approach: Pass 1 collects action stubs, Pass 2 attaches targets.
+        //
+        // pendingActions is scoped per-turn (across messages) via pendingActionsPerGame declared
+        // outside the message loop. When the turn number changes, any prior turn's pending actions
+        // are flushed into actionsByGameKey first (they had no Targetted annotation — emit as-is).
         if (turnNum !== 0) {
           const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
-          const pendingActions = new Map<number, GameAction>();
+          const gk = gameKey(currentMatchId, gameNumber);
+
+          // Initialise or retrieve the per-game pending-actions entry.
+          let gameEntry = pendingActionsPerGame.get(gk);
+          if (!gameEntry) {
+            gameEntry = { actions: new Map(), turn: turnNum };
+            pendingActionsPerGame.set(gk, gameEntry);
+          }
+
+          // Flush previous turn's unresolved actions when the turn advances.
+          if (gameEntry.turn !== turnNum) {
+            flushPendingActions(gk);
+            gameEntry.turn = turnNum;
+          }
+
+          const pendingActions = gameEntry.actions;
 
           // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories
           for (const ann of rawAnnotations) {
@@ -442,7 +482,11 @@ export function createBoardStateCollector(): BoardStateCollector {
             });
           }
 
-          // Pass 2 — attach targets from AnnotationType_Targetted annotations
+          // Pass 2 — attach targets from AnnotationType_Targetted annotations.
+          // These may reference actions added in a *previous* message (same turn), which is
+          // why pendingActions persists across messages within a turn (and across collect()
+          // calls at collector scope). A spell with multiple targets sends multiple Targetted
+          // annotations; all of them accumulate onto the same action stub.
           for (const ann of rawAnnotations) {
             const annType = ann['type'];
             const isTargetted = annType === 'AnnotationType_Targetted'
@@ -468,17 +512,6 @@ export function createBoardStateCollector(): BoardStateCollector {
               if (targetGo?.grpId) {
                 action.targetGrpIds.push(targetGo.grpId);
               }
-            }
-          }
-
-          // Append pending actions into the actionsByGameKey map
-          if (pendingActions.size > 0) {
-            const gk = gameKey(currentMatchId, gameNumber);
-            if (!actionsByGameKey.has(gk)) {
-              actionsByGameKey.set(gk, []);
-            }
-            for (const action of pendingActions.values()) {
-              actionsByGameKey.get(gk)!.push(action);
             }
           }
         }
@@ -525,6 +558,7 @@ export function createBoardStateCollector(): BoardStateCollector {
         tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
       }
     }
+
   }
 
   function rawState(matchId: string, gameNumber: number): RawStateDebug | null {
@@ -556,7 +590,14 @@ export function createBoardStateCollector(): BoardStateCollector {
     collect,
     snapshots: () => completed,
     drawRecords: () => Array.from(drawsByTurnKey.values()),
-    actionRecords: () => Array.from(actionsByGameKey.values()).flat(),
+    actionRecords: () => {
+      // Flush any pending actions from the last turn (never flushed by a turn-change because
+      // the game ended without advancing to a new turn number).
+      for (const [gk] of pendingActionsPerGame) {
+        flushPendingActions(gk);
+      }
+      return Array.from(actionsByGameKey.values()).flat();
+    },
     rawState,
   };
 }

@@ -488,6 +488,214 @@ describe('createBoardStateCollector action tracking', () => {
     expect(collector.drawRecords()).toHaveLength(1);
     expect(collector.actionRecords()).toHaveLength(0);
   });
+
+  // ---------------------------------------------------------------------------
+  // Regression test for GitHub issue #3:
+  // ZoneTransfer and Targetted annotations arriving in SEPARATE GRE messages
+  // ---------------------------------------------------------------------------
+
+  it('attaches targets when ZoneTransfer and Targetted arrive in separate messages (same collect call)', () => {
+    // This is the core regression for issue #3. Before the fix, pendingActions was scoped
+    // per-message: message A's ZoneTransfer would populate pendingActions, which then went
+    // out of scope before message B's Targetted annotation ran Pass 2, so targetInstanceIds
+    // was always [].
+    const collector = createBoardStateCollector();
+
+    const msgA = {
+      greToClientEvent: {
+        greToClientMessages: [
+          {
+            // Message A: ZoneTransfer (CastSpell) — source game object + action stub
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 4, activePlayer: 1 },
+              gameObjects: [
+                { instanceId: 900, grpId: 12000, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card', zoneId: 7 },
+              ],
+              annotations: [
+                {
+                  id: 10,
+                  type: 'AnnotationType_ZoneTransfer',
+                  details: [{ key: 'category', valueString: ['CastSpell'] }],
+                  affectedIds: [900],
+                },
+              ],
+            },
+          },
+          {
+            // Message B (same GRE batch): Targetted annotation — target game object
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 4, activePlayer: 1 },
+              gameObjects: [
+                { instanceId: 901, grpId: 12001, ownerSeatId: 2, controllerSeatId: 2, type: 'GameObjectType_Card', zoneId: 1 },
+              ],
+              annotations: [
+                {
+                  id: 11,
+                  type: 'AnnotationType_Targetted',
+                  details: [{ key: 'sourceId', valueInt32: [900] }],
+                  affectedIds: [901],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    collector.collect(msgA as Record<string, unknown>, 'match-cross-msg');
+
+    const records = collector.actionRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0].sourceGrpId).toBe(12000);
+    expect(records[0].sourceInstanceId).toBe(900);
+    expect(records[0].targetInstanceIds).toEqual([901]);
+    expect(records[0].targetGrpIds).toEqual([12001]);
+  });
+
+  it('attaches targets when ZoneTransfer and Targetted arrive in separate collect() calls (separate GRE event batches)', () => {
+    // This tests the cross-collect-call case: message with ZoneTransfer is in one
+    // greToClientEvent batch, message with Targetted is in the next batch.
+    // Before the fix, pendingActions was re-created each collect() call so the second
+    // batch's Pass 2 always found an empty map.
+    const collector = createBoardStateCollector();
+
+    // Batch 1: ZoneTransfer only
+    const batch1 = {
+      greToClientEvent: {
+        greToClientMessages: [
+          {
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 6, activePlayer: 1 },
+              gameObjects: [
+                { instanceId: 950, grpId: 13000, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card', zoneId: 7 },
+              ],
+              annotations: [
+                {
+                  id: 20,
+                  type: 'AnnotationType_ZoneTransfer',
+                  details: [{ key: 'category', valueString: ['CastSpell'] }],
+                  affectedIds: [950],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    // Batch 2: Targetted annotation only (separate greToClientEvent)
+    const batch2 = {
+      greToClientEvent: {
+        greToClientMessages: [
+          {
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 6, activePlayer: 1 },
+              gameObjects: [
+                { instanceId: 951, grpId: 13001, ownerSeatId: 2, controllerSeatId: 2, type: 'GameObjectType_Card', zoneId: 1 },
+              ],
+              annotations: [
+                {
+                  id: 21,
+                  type: 'AnnotationType_Targetted',
+                  details: [{ key: 'sourceId', valueInt32: [950] }],
+                  affectedIds: [951],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    collector.collect(batch1 as Record<string, unknown>, 'match-cross-call');
+    collector.collect(batch2 as Record<string, unknown>, 'match-cross-call');
+
+    const records = collector.actionRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0].sourceGrpId).toBe(13000);
+    expect(records[0].sourceInstanceId).toBe(950);
+    expect(records[0].targetInstanceIds).toEqual([951]);
+    expect(records[0].targetGrpIds).toEqual([13001]);
+  });
+
+  it('flushes prior turn pending actions (without targets) when turn advances', () => {
+    // An untargeted spell cast on turn 7 should appear in actionRecords with empty targets
+    // when turn 8 is processed (the turn-change flush).
+    const collector = createBoardStateCollector();
+
+    // Turn 7: CastSpell with no Targetted annotation
+    const turn7 = {
+      greToClientEvent: {
+        greToClientMessages: [
+          {
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 7, activePlayer: 1 },
+              gameObjects: [
+                { instanceId: 960, grpId: 14000, ownerSeatId: 1, controllerSeatId: 1, type: 'GameObjectType_Card', zoneId: 7 },
+              ],
+              annotations: [
+                {
+                  id: 30,
+                  type: 'AnnotationType_ZoneTransfer',
+                  details: [{ key: 'category', valueString: ['CastSpell'] }],
+                  affectedIds: [960],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    // Turn 8: unrelated message that advances the turn number
+    const turn8 = {
+      greToClientEvent: {
+        greToClientMessages: [
+          {
+            type: 'GREMessageType_GameStateMessage',
+            systemSeatIds: [1],
+            gameStateMessage: {
+              type: 'GameStateType_Diff',
+              gameInfo: { gameNumber: 1 },
+              turnInfo: { turnNumber: 8, activePlayer: 2 },
+              gameObjects: [],
+              annotations: [],
+            },
+          },
+        ],
+      },
+    };
+
+    collector.collect(turn7 as Record<string, unknown>, 'match-turn-flush');
+    collector.collect(turn8 as Record<string, unknown>, 'match-turn-flush');
+
+    const records = collector.actionRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0].turnNumber).toBe(7);
+    expect(records[0].sourceGrpId).toBe(14000);
+    expect(records[0].targetInstanceIds).toEqual([]);
+    expect(records[0].targetGrpIds).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
