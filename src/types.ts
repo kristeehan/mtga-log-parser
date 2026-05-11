@@ -75,6 +75,25 @@ export interface TurnDrawRecord {
   drawnGrpIds: number[];
 }
 
+/** One record per in-game action (spell cast, ability activated/triggered). */
+export interface GameAction {
+  matchId: string;
+  gameNumber: number;
+  turnNumber: number;
+  /** Category of the action as reported by MTGA. */
+  type: 'CastSpell' | 'ActivateAbility' | 'TriggerAbility';
+  /** True if the local player performed this action. */
+  castByMe: boolean;
+  /** grpId of the source card/permanent. */
+  sourceGrpId: number;
+  /** instanceId of the source card/permanent. */
+  sourceInstanceId: number;
+  /** instanceIds of targets (empty if no targets or targets unresolvable). */
+  targetInstanceIds: number[];
+  /** grpIds of targets, resolved from game state at time of action (empty if hidden). */
+  targetGrpIds: number[];
+}
+
 // === Deck types ===
 
 export interface CardEntry {
@@ -119,6 +138,8 @@ export interface ParseResult {
   boardSnapshots: TurnSnapshot[];
   /** Per-turn records of grpIds drawn by the local player. Only turns where at least one draw was tracked are included. */
   turnDrawRecords: TurnDrawRecord[];
+  /** All game actions (spells cast, abilities used) where the source grpId was resolvable. */
+  gameActions: GameAction[];
   myDeckListMap: Map<string, DeckList>;
   deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
   /** Returns raw accumulated zone/object state for a match+game — useful for diagnosing unexpected board snapshots. */
@@ -152,6 +173,7 @@ export interface BoardStateCollector {
   ): void;
   snapshots(): TurnSnapshot[];
   drawRecords(): TurnDrawRecord[];
+  actionRecords(): GameAction[];
   rawState(matchId: string, gameNumber: number): RawStateDebug | null;
 }
 
@@ -226,6 +248,7 @@ export interface CollectorState {
   currentGameNumbers: Map<string, number>;
   completed: TurnSnapshot[];
   drawsByTurnKey: Map<string, TurnDrawRecord>;
+  actionsByGameKey: Map<string, GameAction[]>;
 }
 
 // === Internal session state ===

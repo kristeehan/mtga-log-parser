@@ -2,6 +2,7 @@ import type {
   BoardCard,
   TurnSnapshot,
   TurnDrawRecord,
+  GameAction,
   RawGameObject,
   RawZone,
   LiveGameState,
@@ -171,12 +172,13 @@ function createCollectorState(): CollectorState {
     currentGameNumbers: new Map<string, number>(),
     completed: [],
     drawsByTurnKey: new Map<string, TurnDrawRecord>(),
+    actionsByGameKey: new Map<string, GameAction[]>(),
   };
 }
 
 export function createBoardStateCollector(): BoardStateCollector {
   const collectorState = createCollectorState();
-  const { liveStates, lastTurnNumbers, lastPhases, lastEmittedLabel, currentGameNumbers, completed, drawsByTurnKey } = collectorState;
+  const { liveStates, lastTurnNumbers, lastPhases, lastEmittedLabel, currentGameNumbers, completed, drawsByTurnKey, actionsByGameKey } = collectorState;
 
   function getOrCreateState(matchId: string, gameNumber: number): LiveGameState {
     const key = gameKey(matchId, gameNumber);
@@ -394,6 +396,92 @@ export function createBoardStateCollector(): BoardStateCollector {
             drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
           }
         }
+
+        // Process ZoneTransfer action annotations (CastSpell, ActivateAbility, TriggerAbility).
+        // Two-pass approach: Pass 1 collects action stubs, Pass 2 attaches targets.
+        if (turnNum !== 0) {
+          const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
+          const pendingActions = new Map<number, GameAction>();
+
+          // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories
+          for (const ann of rawAnnotations) {
+            const annType = ann['type'];
+            const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
+              || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
+            if (!isZoneTransfer) continue;
+
+            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+            const categoryValue = details?.find((d) => d['key'] === 'category');
+            const category = Array.isArray(categoryValue?.['valueString'])
+              ? (categoryValue!['valueString'] as string[])[0]
+              : categoryValue?.['valueString'];
+            if (typeof category !== 'string' || !ACTION_CATEGORIES.has(category)) continue;
+
+            const affectedIds = ann['affectedIds'];
+            if (!Array.isArray(affectedIds) || affectedIds.length === 0) continue;
+
+            const sourceInstanceId = affectedIds[0];
+            if (typeof sourceInstanceId !== 'number') continue;
+
+            const go = state.gameObjects.get(sourceInstanceId);
+            // Skip if grpId is not resolvable
+            if (!go?.grpId) continue;
+
+            const castByMe = go.ownerSeatId === state.localSeatId || go.controllerSeatId === state.localSeatId;
+
+            pendingActions.set(sourceInstanceId, {
+              matchId: currentMatchId,
+              gameNumber,
+              turnNumber: turnNum,
+              type: category as 'CastSpell' | 'ActivateAbility' | 'TriggerAbility',
+              castByMe,
+              sourceGrpId: go.grpId,
+              sourceInstanceId,
+              targetInstanceIds: [],
+              targetGrpIds: [],
+            });
+          }
+
+          // Pass 2 — attach targets from AnnotationType_Targetted annotations
+          for (const ann of rawAnnotations) {
+            const annType = ann['type'];
+            const isTargetted = annType === 'AnnotationType_Targetted'
+              || (Array.isArray(annType) && annType.includes('AnnotationType_Targetted'));
+            if (!isTargetted) continue;
+
+            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+            const sourceIdEntry = details?.find((d) => d['key'] === 'sourceId');
+            const sourceIdRaw = sourceIdEntry?.['valueInt32'];
+            const sourceId = Array.isArray(sourceIdRaw) ? sourceIdRaw[0] : sourceIdRaw;
+            if (typeof sourceId !== 'number') continue;
+
+            const action = pendingActions.get(sourceId);
+            if (!action) continue;
+
+            const affectedIds = ann['affectedIds'];
+            if (!Array.isArray(affectedIds)) continue;
+
+            for (const targetInstanceId of affectedIds) {
+              if (typeof targetInstanceId !== 'number') continue;
+              action.targetInstanceIds.push(targetInstanceId);
+              const targetGo = state.gameObjects.get(targetInstanceId);
+              if (targetGo?.grpId) {
+                action.targetGrpIds.push(targetGo.grpId);
+              }
+            }
+          }
+
+          // Append pending actions into the actionsByGameKey map
+          if (pendingActions.size > 0) {
+            const gk = gameKey(currentMatchId, gameNumber);
+            if (!actionsByGameKey.has(gk)) {
+              actionsByGameKey.set(gk, []);
+            }
+            for (const action of pendingActions.values()) {
+              actionsByGameKey.get(gk)!.push(action);
+            }
+          }
+        }
       }
 
       if (!state.turnInfo?.turnNumber) continue;
@@ -468,6 +556,7 @@ export function createBoardStateCollector(): BoardStateCollector {
     collect,
     snapshots: () => completed,
     drawRecords: () => Array.from(drawsByTurnKey.values()),
+    actionRecords: () => Array.from(actionsByGameKey.values()).flat(),
     rawState,
   };
 }

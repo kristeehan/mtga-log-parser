@@ -19,6 +19,7 @@ export type {
   BoardCard,
   TurnSnapshot,
   TurnDrawRecord,
+  GameAction,
   // Deck types
   CardEntry,
   DeckList,

@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import type { Match, GameSnapshot, TurnSnapshot, TurnDrawRecord, ParseConfig, ParseResult, DeckList, Session, ParseSession } from './types.js';
+import type { Match, GameSnapshot, TurnSnapshot, TurnDrawRecord, GameAction, ParseConfig, ParseResult, DeckList, Session, ParseSession } from './types.js';
 import { parseLogDate, tryParseJSON } from './utils.js';
 import { createGameDataCollector } from './gameDataParser.js';
 import { createBoardStateCollector } from './boardStateParser.js';
@@ -202,6 +202,7 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
 
   const boardSnapshots: TurnSnapshot[] = boardStateCollector.snapshots().filter((s) => matchIds.has(s.matchId));
   const turnDrawRecords: TurnDrawRecord[] = boardStateCollector.drawRecords().filter((r) => matchIds.has(r.matchId));
+  const gameActions: GameAction[] = boardStateCollector.actionRecords().filter((a) => matchIds.has(a.matchId));
 
   return {
     matches,
@@ -209,6 +210,7 @@ export async function parseAllLogsWithDebug(config: ParseConfig): Promise<ParseR
     gameSnapshots,
     boardSnapshots,
     turnDrawRecords,
+    gameActions,
     myDeckListMap,
     deckUsages,
     debugBoardState: (matchId, gameNumber) => boardStateCollector.rawState(matchId, gameNumber),
