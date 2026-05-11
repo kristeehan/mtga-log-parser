@@ -37,7 +37,7 @@ UTC_Log - *.log files
          ├─ gameDataCollector.collect   (src/gameDataParser.ts)
          └─ boardStateCollector.collect (src/boardStateParser.ts)
         ↓
-  ParseResult  { matches, gameSnapshots, boardSnapshots, turnDrawRecords, deckUsages, … }
+  ParseResult  { matches, gameSnapshots, boardSnapshots, turnDrawRecords, gameActions, deckUsages, … }
 ```
 
 ### Module map
@@ -50,7 +50,7 @@ UTC_Log - *.log files
 | `src/deckParser.ts` | Deck resolution: `extractDeckInfo`, `applyCoursesPayload`, `handleParseDeck` |
 | `src/matchHandler.ts` | Match state machine: `handleMatchStart`, `handleMatchEnd`, `tryExtractGameState` |
 | `src/gameDataParser.ts` | `createGameDataCollector` — life totals, mulligans, game end reason |
-| `src/boardStateParser.ts` | `createBoardStateCollector` — per-phase board snapshots, draw tracking |
+| `src/boardStateParser.ts` | `createBoardStateCollector` — per-phase board snapshots, draw tracking, action tracking |
 | `src/rawGameObjects.ts` | GRE JSON → typed struct mapping: `toGameObject`, `mergeGameObject`, `toZone`, `toPlayer`, `toBoardCard`, `gameKey` |
 | `src/analytics.ts` | `opponentsByPlatform` |
 
@@ -74,13 +74,16 @@ Every interface and type alias lives in `src/types.ts` and is exported from ther
 - `GameSnapshot` — life totals, mulligan counts, turn count, end reason; one per game
 - `TurnSnapshot` — full board state snapshot per phase; includes hand, battlefield, graveyard, stack for both players
 - `TurnDrawRecord` — grpIds drawn by the local player, one record per turn where a draw occurred
+- `GameAction` — one record per spell cast or ability used (both players); includes `type` (`CastSpell`/`ActivateAbility`/`TriggerAbility`), `castByMe`, `sourceGrpId`/`sourceInstanceId`, and `targetGrpIds`/`targetInstanceIds` resolved from game state at cast time
 - `DeckList` — `{ main: CardEntry[], sideboard: CardEntry[] }` where each entry is `{ cardId, quantity }`
 
 ### Sub-collectors
 
 `createGameDataCollector` and `createBoardStateCollector` are factory functions that return a `collect(raw, matchId, ...)` method and a `snapshots()` method. They process `greToClientEvent / GameStateMessage` payloads independently and are called from `handleParseGREEventLine`.
 
-`boardStateCollector` also exposes `drawRecords()` (returns `TurnDrawRecord[]`) and `rawState(matchId, gameNumber)` (returns `RawStateDebug | null` for diagnosing unexpected board snapshots). `rawState` is surfaced on `ParseResult` as `debugBoardState(matchId, gameNumber)`.
+`boardStateCollector` also exposes `drawRecords()` (returns `TurnDrawRecord[]`), `actionRecords()` (returns `GameAction[]`), and `rawState(matchId, gameNumber)` (returns `RawStateDebug | null` for diagnosing unexpected board snapshots). `rawState` is surfaced on `ParseResult` as `debugBoardState(matchId, gameNumber)`.
+
+**Action tracking uses a two-pass annotation loop.** Within each `GameStateMessage`, Pass 1 scans `AnnotationType_ZoneTransfer` annotations with category `CastSpell`, `ActivateAbility`, or `TriggerAbility` and builds a `pendingActions` map keyed by `sourceInstanceId`. Pass 2 scans `AnnotationType_Targetted` annotations, reads `sourceId` from the `details` array (`valueInt32` field), and attaches target instanceIds/grpIds to the matching pending action. Actions with unresolvable `grpId` (opponent hand cards) are silently dropped.
 
 ### ESM-only
 

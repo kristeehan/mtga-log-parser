@@ -1,6 +1,6 @@
 # mtga-log-parser
 
-Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, and per-turn board state records. Supports all formats — Ranked, Bo1, Bo3, limited, bot matches. No manual input required — match results, play/draw, deck names, opponent card colors, and opponent platform are all auto-detected from the log.
+Parse Magic: The Gathering Arena (MTGA) log files into structured match data, per-game snapshots, per-turn board state records, and a full action log of every spell cast and ability used. Supports all formats — Ranked, Bo1, Bo3, limited, bot matches. No manual input required — match results, play/draw, deck names, opponent card colors, and opponent platform are all auto-detected from the log.
 
 ## Installation
 
@@ -127,11 +127,50 @@ result.matches;           // Match[] — completed matches (all formats by defau
 result.gameSnapshots;     // GameSnapshot[] — one per game (life totals, mulligans, turn count)
 result.boardSnapshots;    // TurnSnapshot[] — per-phase board state for every turn
 result.turnDrawRecords;   // TurnDrawRecord[] — grpIds drawn by local player per turn
+result.gameActions;       // GameAction[] — every spell cast and ability used, with targeting
 result.myDeckListMap;     // Map<matchId, DeckList> — grpId card lists
 result.deckUsages;        // Map<deckName, { deck, timestamp }> — most recent list per deck name
 result.opponentGrpIds;    // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
 result.debugBoardState(matchId, gameNumber); // RawStateDebug | null — raw zone/object state for diagnosing board snapshots
 ```
+
+## Game actions (spells, abilities, targeting)
+
+`result.gameActions` is a flat array of `GameAction` records — one per spell cast or ability used in each game. Both players' actions are included where the source card's `grpId` is resolvable (opponent hand is hidden, but battlefield permanents are visible).
+
+```ts
+import { parseAllLogsWithDebug } from 'mtga-log-parser';
+
+const result = await parseAllLogsWithDebug({ logDir: '...' });
+
+for (const action of result.gameActions) {
+  console.log(action);
+  // {
+  //   matchId: 'abc-123',
+  //   gameNumber: 1,
+  //   turnNumber: 4,
+  //   type: 'CastSpell',       // 'CastSpell' | 'ActivateAbility' | 'TriggerAbility'
+  //   castByMe: true,          // false when opponent acted
+  //   sourceGrpId: 84790,      // grpId of the spell/permanent
+  //   sourceInstanceId: 1234,  // instanceId within this game
+  //   targetInstanceIds: [5678],       // instanceIds of targets (empty if no targets)
+  //   targetGrpIds: [75123],           // grpIds of targets resolved at cast time
+  // }
+}
+```
+
+Filter to a specific match and game:
+
+```ts
+const game1Actions = result.gameActions.filter(
+  (a) => a.matchId === myMatchId && a.gameNumber === 1
+);
+```
+
+**Notes:**
+- Actions are only included for completed matches (same filter as `matches`).
+- `targetGrpIds` may be empty even when targets exist if the target is a face-down or otherwise hidden object.
+- `targetInstanceIds` always contains the raw instance IDs from the log regardless of visibility.
 
 ## `ParseConfig` reference
 
@@ -140,6 +179,10 @@ result.debugBoardState(matchId, gameNumber); // RawStateDebug | null — raw zon
 | `logDir` | `string` | Yes | Directory containing `UTC_Log - *.log` files |
 | `matchFilter` | `(eventId: string) => boolean` | No | Predicate to restrict which matches are included. Defaults to `MatchFilters.all`. Use `MatchFilters.bo3Constructed` to replicate pre-2.0 behavior. |
 | `resolveColors` | `(grpIds: number[]) => Promise<string>` | No | Async callback to derive opponent color string (e.g. `"WU"`) from card grpIds. If omitted, `match.opponentColors` will be `""`. |
+
+## Migrating from 3.x
+
+Version 4.0 is additive — no existing fields were removed or renamed. The only change is the new `gameActions: GameAction[]` field on `ParseResult`. Existing code continues to work without modification.
 
 ## Migrating from 2.x
 
