@@ -417,33 +417,43 @@ export function createBoardStateCollector(): BoardStateCollector {
             drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
           }
         }
+      }
 
-        // Process ZoneTransfer action annotations (CastSpell, ActivateAbility, TriggerAbility).
-        // Two-pass approach: Pass 1 collects action stubs, Pass 2 attaches targets.
-        //
-        // pendingActions is scoped per-turn (across messages) via pendingActionsPerGame declared
-        // outside the message loop. When the turn number changes, any prior turn's pending actions
-        // are flushed into actionsByGameKey first (they had no Targetted annotation — emit as-is).
-        if (turnNum !== 0) {
-          const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
-          const gk = gameKey(currentMatchId, gameNumber);
+      // Process action annotations (CastSpell, ActivateAbility, TriggerAbility) and their targets.
+      // Two-pass approach: Pass 1 collects action stubs from ZoneTransfer in annotations;
+      // Pass 2 attaches targets from AnnotationType_TargetSpec in persistentAnnotations.
+      //
+      // These two passes are separated because targeting data lives in persistentAnnotations
+      // (a different field from annotations) and may arrive in a different game state message
+      // than the ZoneTransfer that initiated the action.
+      //
+      // pendingActions is scoped per-turn (across messages) via pendingActionsPerGame declared
+      // outside the message loop. When the turn number changes, any prior turn's pending actions
+      // are flushed into actionsByGameKey first (they had no TargetSpec annotation — emit as-is).
+      const rawPersistentAnnotations = gsm['persistentAnnotations'] as Array<Record<string, unknown>> | undefined;
+      const hasTurnNum = state.turnInfo?.turnNumber !== undefined;
+      const turnNum = hasTurnNum ? state.turnInfo!.turnNumber : undefined;
+      if (hasTurnNum && turnNum !== undefined && turnNum !== 0 && (rawAnnotations || rawPersistentAnnotations)) {
+        const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
+        const gk = gameKey(currentMatchId, gameNumber);
 
-          // Initialise or retrieve the per-game pending-actions entry.
-          let gameEntry = pendingActionsPerGame.get(gk);
-          if (!gameEntry) {
-            gameEntry = { actions: new Map(), turn: turnNum };
-            pendingActionsPerGame.set(gk, gameEntry);
-          }
+        // Initialise or retrieve the per-game pending-actions entry.
+        let gameEntry = pendingActionsPerGame.get(gk);
+        if (!gameEntry) {
+          gameEntry = { actions: new Map(), turn: turnNum };
+          pendingActionsPerGame.set(gk, gameEntry);
+        }
 
-          // Flush previous turn's unresolved actions when the turn advances.
-          if (gameEntry.turn !== turnNum) {
-            flushPendingActions(gk);
-            gameEntry.turn = turnNum;
-          }
+        // Flush previous turn's unresolved actions when the turn advances.
+        if (gameEntry.turn !== turnNum) {
+          flushPendingActions(gk);
+          gameEntry.turn = turnNum;
+        }
 
-          const pendingActions = gameEntry.actions;
+        const pendingActions = gameEntry.actions;
 
-          // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories
+        // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories.
+        if (rawAnnotations) {
           for (const ann of rawAnnotations) {
             const annType = ann['type'];
             const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
@@ -481,25 +491,28 @@ export function createBoardStateCollector(): BoardStateCollector {
               targetGrpIds: [],
             });
           }
+        }
 
-          // Pass 2 — attach targets from AnnotationType_Targetted annotations.
-          // These may reference actions added in a *previous* message (same turn), which is
-          // why pendingActions persists across messages within a turn (and across collect()
-          // calls at collector scope). A spell with multiple targets sends multiple Targetted
-          // annotations; all of them accumulate onto the same action stub.
-          for (const ann of rawAnnotations) {
+        // Pass 2 — attach targets from AnnotationType_TargetSpec in persistentAnnotations.
+        // Targeting data lives in persistentAnnotations (not annotations), uses the type
+        // AnnotationType_TargetSpec, and identifies the source spell via the top-level
+        // affectorId field (not a details entry keyed by 'sourceId').
+        // These may reference actions added in a *previous* message (same turn), which is
+        // why pendingActions persists across messages within a turn (and across collect()
+        // calls at collector scope). A spell with multiple targets may have multiple entries
+        // in affectedIds; all of them accumulate onto the same action stub.
+        if (rawPersistentAnnotations) {
+          for (const ann of rawPersistentAnnotations) {
             const annType = ann['type'];
-            const isTargetted = annType === 'AnnotationType_Targetted'
-              || (Array.isArray(annType) && annType.includes('AnnotationType_Targetted'));
-            if (!isTargetted) continue;
+            const isTargetSpec =
+              annType === 'AnnotationType_TargetSpec' ||
+              (Array.isArray(annType) && annType.includes('AnnotationType_TargetSpec'));
+            if (!isTargetSpec) continue;
 
-            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
-            const sourceIdEntry = details?.find((d) => d['key'] === 'sourceId');
-            const sourceIdRaw = sourceIdEntry?.['valueInt32'];
-            const sourceId = Array.isArray(sourceIdRaw) ? sourceIdRaw[0] : sourceIdRaw;
-            if (typeof sourceId !== 'number') continue;
+            const affectorId = ann['affectorId'];
+            if (typeof affectorId !== 'number') continue;
 
-            const action = pendingActions.get(sourceId);
+            const action = pendingActions.get(affectorId);
             if (!action) continue;
 
             const affectedIds = ann['affectedIds'];

@@ -94,13 +94,20 @@ function greActionLine(opts: {
       details: [{ key: 'category', valueString: [category] }],
       affectedIds: [source.instanceId],
     },
-    ...targets.map((t, i) => ({
-      id: 3000 + i,
-      type: 'AnnotationType_Targetted',
-      details: [{ key: 'sourceId', valueInt32: [source.instanceId] }],
-      affectedIds: [t.instanceId],
-    })),
   ];
+
+  // Targeting data lives in persistentAnnotations using AnnotationType_TargetSpec and affectorId.
+  // Each target gets its own entry (affectedIds can also be an array of multiple targets).
+  const persistentAnnotations: Array<Record<string, unknown>> = targets.map((t, i) => ({
+    id: 3000 + i,
+    affectorId: source.instanceId,
+    affectedIds: [t.instanceId],
+    type: ['AnnotationType_TargetSpec'],
+    details: [
+      { key: 'abilityGrpId', valueInt32: [source.grpId] },
+      { key: 'index', valueInt32: [i + 1] },
+    ],
+  }));
 
   const json = {
     greToClientEvent: {
@@ -114,6 +121,7 @@ function greActionLine(opts: {
             turnInfo: { turnNumber, activePlayer },
             gameObjects,
             annotations,
+            ...(persistentAnnotations.length > 0 ? { persistentAnnotations } : {}),
           },
         },
       ],
@@ -313,7 +321,7 @@ describe('createBoardStateCollector action tracking', () => {
     expect(collector.actionRecords()).toHaveLength(0);
   });
 
-  it('attaches target grpIds from AnnotationType_Targetted annotations', () => {
+  it('attaches target grpIds from AnnotationType_TargetSpec persistentAnnotations', () => {
     const collector = createBoardStateCollector();
 
     const msg = {
@@ -339,11 +347,14 @@ describe('createBoardStateCollector action tracking', () => {
                   details: [{ key: 'category', valueString: ['CastSpell'] }],
                   affectedIds: [500],
                 },
+              ],
+              persistentAnnotations: [
                 {
                   id: 2,
-                  type: 'AnnotationType_Targetted',
-                  details: [{ key: 'sourceId', valueInt32: [500] }],
+                  affectorId: 500,
                   affectedIds: [501],
+                  type: ['AnnotationType_TargetSpec'],
+                  details: [{ key: 'abilityGrpId', valueInt32: [8000] }],
                 },
               ],
             },
@@ -386,17 +397,21 @@ describe('createBoardStateCollector action tracking', () => {
                   details: [{ key: 'category', valueString: ['CastSpell'] }],
                   affectedIds: [600],
                 },
+              ],
+              persistentAnnotations: [
                 {
                   id: 2,
-                  type: 'AnnotationType_Targetted',
-                  details: [{ key: 'sourceId', valueInt32: [600] }],
+                  affectorId: 600,
                   affectedIds: [601],
+                  type: ['AnnotationType_TargetSpec'],
+                  details: [{ key: 'abilityGrpId', valueInt32: [9000] }],
                 },
                 {
                   id: 3,
-                  type: 'AnnotationType_Targetted',
-                  details: [{ key: 'sourceId', valueInt32: [600] }],
+                  affectorId: 600,
                   affectedIds: [602],
+                  type: ['AnnotationType_TargetSpec'],
+                  details: [{ key: 'abilityGrpId', valueInt32: [9000] }],
                 },
               ],
             },
@@ -494,10 +509,10 @@ describe('createBoardStateCollector action tracking', () => {
   // ZoneTransfer and Targetted annotations arriving in SEPARATE GRE messages
   // ---------------------------------------------------------------------------
 
-  it('attaches targets when ZoneTransfer and Targetted arrive in separate messages (same collect call)', () => {
+  it('attaches targets when ZoneTransfer and TargetSpec arrive in separate messages (same collect call)', () => {
     // This is the core regression for issue #3. Before the fix, pendingActions was scoped
     // per-message: message A's ZoneTransfer would populate pendingActions, which then went
-    // out of scope before message B's Targetted annotation ran Pass 2, so targetInstanceIds
+    // out of scope before message B's TargetSpec annotation ran Pass 2, so targetInstanceIds
     // was always [].
     const collector = createBoardStateCollector();
 
@@ -526,7 +541,7 @@ describe('createBoardStateCollector action tracking', () => {
             },
           },
           {
-            // Message B (same GRE batch): Targetted annotation — target game object
+            // Message B (same GRE batch): TargetSpec in persistentAnnotations — target game object
             type: 'GREMessageType_GameStateMessage',
             systemSeatIds: [1],
             gameStateMessage: {
@@ -536,12 +551,13 @@ describe('createBoardStateCollector action tracking', () => {
               gameObjects: [
                 { instanceId: 901, grpId: 12001, ownerSeatId: 2, controllerSeatId: 2, type: 'GameObjectType_Card', zoneId: 1 },
               ],
-              annotations: [
+              persistentAnnotations: [
                 {
                   id: 11,
-                  type: 'AnnotationType_Targetted',
-                  details: [{ key: 'sourceId', valueInt32: [900] }],
+                  affectorId: 900,
                   affectedIds: [901],
+                  type: ['AnnotationType_TargetSpec'],
+                  details: [{ key: 'abilityGrpId', valueInt32: [12000] }],
                 },
               ],
             },
@@ -560,9 +576,9 @@ describe('createBoardStateCollector action tracking', () => {
     expect(records[0].targetGrpIds).toEqual([12001]);
   });
 
-  it('attaches targets when ZoneTransfer and Targetted arrive in separate collect() calls (separate GRE event batches)', () => {
+  it('attaches targets when ZoneTransfer and TargetSpec arrive in separate collect() calls (separate GRE event batches)', () => {
     // This tests the cross-collect-call case: message with ZoneTransfer is in one
-    // greToClientEvent batch, message with Targetted is in the next batch.
+    // greToClientEvent batch, message with TargetSpec is in the next batch.
     // Before the fix, pendingActions was re-created each collect() call so the second
     // batch's Pass 2 always found an empty map.
     const collector = createBoardStateCollector();
@@ -595,7 +611,7 @@ describe('createBoardStateCollector action tracking', () => {
       },
     };
 
-    // Batch 2: Targetted annotation only (separate greToClientEvent)
+    // Batch 2: AnnotationType_TargetSpec in persistentAnnotations (separate greToClientEvent)
     const batch2 = {
       greToClientEvent: {
         greToClientMessages: [
@@ -609,12 +625,13 @@ describe('createBoardStateCollector action tracking', () => {
               gameObjects: [
                 { instanceId: 951, grpId: 13001, ownerSeatId: 2, controllerSeatId: 2, type: 'GameObjectType_Card', zoneId: 1 },
               ],
-              annotations: [
+              persistentAnnotations: [
                 {
                   id: 21,
-                  type: 'AnnotationType_Targetted',
-                  details: [{ key: 'sourceId', valueInt32: [950] }],
+                  affectorId: 950,
                   affectedIds: [951],
+                  type: ['AnnotationType_TargetSpec'],
+                  details: [{ key: 'abilityGrpId', valueInt32: [13000] }],
                 },
               ],
             },
