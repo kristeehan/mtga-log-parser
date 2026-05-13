@@ -1,5 +1,9 @@
 import type { CardEntry, GameResult, MatchResult } from './types.js';
 
+export function gameKey(matchId: string, gameNumber: number): string {
+  return `${matchId}:${gameNumber}`;
+}
+
 export function computeMatchResult(g1: GameResult, g2: GameResult, g3: GameResult): MatchResult {
   if (g1 === null) return null;
 

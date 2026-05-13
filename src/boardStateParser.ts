@@ -9,9 +9,10 @@ import type {
   RawStateDebug,
   BoardStateCollector,
   CollectorState,
+  ProcessAnnotationsArgs,
 } from './types.js';
-import { toBoardCard, gameKey, toGameObject, mergeGameObject, toZone, toPlayer } from './rawGameObjects.js';
-
+import { toBoardCard, toGameObject, mergeGameObject, toZone, toPlayer } from './rawGameObjects.js';
+import { gameKey } from './utils.js';
 
 function buildSnapshot(
   matchId: string,
@@ -181,9 +182,10 @@ export function createBoardStateCollector(): BoardStateCollector {
   const { liveStates, lastTurnNumbers, lastPhases, lastEmittedLabel, currentGameNumbers, completed, drawsByTurnKey, actionsByGameKey } = collectorState;
 
   // Pending actions are scoped per-turn across collect() calls. MTGA frequently sends
-  // ZoneTransfer (CastSpell) and Targetted annotations in separate game state messages /
-  // GRE event batches. Keeping this map at collector scope means Pass 2 (Targetted) can
+  // ZoneTransfer (CastSpell) and TargetSpec annotations in separate game state messages /
+  // GRE event batches. Keeping this map at collector scope means Pass 2 (TargetSpec) can
   // find stubs created by Pass 1 (ZoneTransfer) even across separate collect() invocations.
+  // Accessed by processAnnotations via closure — not passed as an argument.
   // Key: gameKey(matchId, gameNumber) → { actions: Map<sourceInstanceId, GameAction>, turn: number }
   const pendingActionsPerGame = new Map<string, {
     actions: Map<number, GameAction>;
@@ -236,6 +238,192 @@ export function createBoardStateCollector(): BoardStateCollector {
     if (snapshot) completed.push(snapshot);
   }
 
+  function processAnnotations(obj: ProcessAnnotationsArgs): void {
+    const { gsm, state, currentMatchId, gameNumber, drawsByTurnKey } = obj;
+
+    // Combat continuation phases: MTGA sometimes advances turnNumber before these are logged,
+    // so we attribute them to the turn where BeginCombat was first seen.
+    const COMBAT_CONTINUATION = new Set([
+      'Step_DeclareAttack', 'Step_DeclareBlock', 'Step_CombatDamage', 'Step_EndCombat',
+    ]);
+
+    const rawAnnotations = gsm['annotations'] as Array<Record<string, unknown>> | undefined;
+    if (rawAnnotations && state.turnInfo?.turnNumber !== undefined) {
+      const turnNum = state.turnInfo.turnNumber;
+      for (const ann of rawAnnotations) {
+        if (turnNum === 0) continue;
+        const annType = ann['type'];
+        const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
+          || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
+        if (!isZoneTransfer) continue;
+        const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+        const categoryValue = details?.find((d) => d['key'] === 'category');
+        const category = Array.isArray(categoryValue?.['valueString'])
+          ? (categoryValue!['valueString'] as string[])[0]
+          : categoryValue?.['valueString'];
+        if (category !== 'Draw') continue;
+
+        const affectedIds = ann['affectedIds'];
+        if (!Array.isArray(affectedIds)) continue;
+
+        for (const affectedId of affectedIds) {
+          if (typeof affectedId !== 'number') continue;
+          const go = state.gameObjects.get(affectedId);
+          // Only track draws where the grpId is resolvable (local player's cards are visible)
+          if (!go?.grpId) continue;
+          // Confirm the card is owned by the local player (opponent hand is hidden)
+          if (go.ownerSeatId !== undefined && go.ownerSeatId !== state.localSeatId) continue;
+
+          const key = `${currentMatchId}:${gameNumber}:${turnNum}`;
+          if (!drawsByTurnKey.has(key)) {
+            drawsByTurnKey.set(key, { matchId: currentMatchId, gameNumber, turnNumber: turnNum, drawnGrpIds: [] });
+          }
+          drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
+        }
+      }
+    }
+    const rawPersistentAnnotations = gsm['persistentAnnotations'] as Array<Record<string, unknown>> | undefined;
+    const hasTurnNum = state.turnInfo?.turnNumber !== undefined;
+    const turnNum = hasTurnNum ? state.turnInfo!.turnNumber : undefined;
+      if (hasTurnNum && turnNum !== undefined && turnNum !== 0 && (rawAnnotations || rawPersistentAnnotations)) {
+        const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
+        const gk = gameKey(currentMatchId, gameNumber);
+
+        // Initialise or retrieve the per-game pending-actions entry.
+        let gameEntry = pendingActionsPerGame.get(gk);
+        if (!gameEntry) {
+          gameEntry = { actions: new Map(), turn: turnNum };
+          pendingActionsPerGame.set(gk, gameEntry);
+        }
+
+        // Flush previous turn's unresolved actions when the turn advances.
+        if (gameEntry.turn !== turnNum) {
+          flushPendingActions(gk);
+          gameEntry.turn = turnNum;
+        }
+
+        const pendingActions = gameEntry.actions;
+
+        // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories.
+        if (rawAnnotations) {
+          for (const ann of rawAnnotations) {
+            const annType = ann['type'];
+            const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
+              || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
+            if (!isZoneTransfer) continue;
+
+            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+            const categoryValue = details?.find((d) => d['key'] === 'category');
+            const category = Array.isArray(categoryValue?.['valueString'])
+              ? (categoryValue!['valueString'] as string[])[0]
+              : categoryValue?.['valueString'];
+            if (typeof category !== 'string' || !ACTION_CATEGORIES.has(category)) continue;
+
+            const affectedIds = ann['affectedIds'];
+            if (!Array.isArray(affectedIds) || affectedIds.length === 0) continue;
+
+            const sourceInstanceId = affectedIds[0];
+            if (typeof sourceInstanceId !== 'number') continue;
+
+            const go = state.gameObjects.get(sourceInstanceId);
+            // Skip if grpId is not resolvable
+            if (!go?.grpId) continue;
+
+            const castByMe = go.ownerSeatId === state.localSeatId || go.controllerSeatId === state.localSeatId;
+
+            pendingActions.set(sourceInstanceId, {
+              matchId: currentMatchId,
+              gameNumber,
+              turnNumber: turnNum,
+              type: category as 'CastSpell' | 'ActivateAbility' | 'TriggerAbility',
+              castByMe,
+              sourceGrpId: go.grpId,
+              sourceInstanceId,
+              targetInstanceIds: [],
+              targetGrpIds: [],
+            });
+          }
+        }
+
+        // Pass 2 — attach targets from AnnotationType_TargetSpec in persistentAnnotations.
+        // Targeting data lives in persistentAnnotations (not annotations), uses the type
+        // AnnotationType_TargetSpec, and identifies the source spell via the top-level
+        // affectorId field (not a details entry keyed by 'sourceId').
+        // These may reference actions added in a *previous* message (same turn), which is
+        // why pendingActions persists across messages within a turn (and across collect()
+        // calls at collector scope). A spell with multiple targets may have multiple entries
+        // in affectedIds; all of them accumulate onto the same action stub.
+        if (rawPersistentAnnotations) {
+          for (const ann of rawPersistentAnnotations) {
+            const annType = ann['type'];
+            const isTargetSpec =
+              annType === 'AnnotationType_TargetSpec' ||
+              (Array.isArray(annType) && annType.includes('AnnotationType_TargetSpec'));
+            if (!isTargetSpec) continue;
+
+            const affectorId = ann['affectorId'];
+            if (typeof affectorId !== 'number') continue;
+
+            const action = pendingActions.get(affectorId);
+            if (!action) continue;
+
+            const affectedIds = ann['affectedIds'];
+            if (!Array.isArray(affectedIds)) continue;
+
+            for (const targetInstanceId of affectedIds) {
+              if (typeof targetInstanceId !== 'number') continue;
+              action.targetInstanceIds.push(targetInstanceId);
+              const targetGo = state.gameObjects.get(targetInstanceId);
+              if (targetGo?.grpId) {
+                action.targetGrpIds.push(targetGo.grpId);
+              }
+            }
+          }
+        }
+      }
+
+      if (!state.turnInfo?.turnNumber) return;
+
+      const currentTurn = state.turnInfo.turnNumber;
+      const turnKey = gameKey(currentMatchId, gameNumber);
+      const prevTurn = lastTurnNumbers.get(turnKey);
+      const phase = state.turnInfo.phase ?? 'Phase_Unknown';
+      // Use step name when available — steps are sub-phases within Phase_Begin (Untap/Upkeep/Draw)
+      // and combat (DeclareAttackers/DeclareBlockers/etc.). Comparing only phase misses these.
+      const step = state.turnInfo.step ?? '';
+      const phaseLabel = step || phase;
+      const prevPhase = lastPhases.get(turnKey);
+
+      // Track combat start so continuation phases can be attributed to the correct turn
+      // even when MTGA has already advanced turnNumber by the time it logs them.
+      if (phaseLabel === 'Step_BeginCombat') {
+        state.activeCombatTurn = currentTurn;
+        state.activeCombatPlayer = state.turnInfo.activePlayer;
+      }
+      const effectiveTurn = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
+        ? state.activeCombatTurn
+        : currentTurn;
+      const effectivePlayer = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
+        ? state.activeCombatPlayer
+        : state.turnInfo.activePlayer;
+      if (phaseLabel === 'Step_EndCombat') {
+        state.activeCombatTurn = null;
+        state.activeCombatPlayer = undefined;
+      }
+
+      // Emit a snapshot immediately after each message's state updates are applied.
+      // This ensures each snapshot reflects the board state at that exact phase transition,
+      // rather than at the end of the batch (which may span multiple turns).
+      if (prevTurn !== currentTurn) {
+        lastTurnNumbers.set(turnKey, currentTurn);
+        lastPhases.set(turnKey, phaseLabel);
+        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
+      } else if (phaseLabel !== prevPhase) {
+        lastPhases.set(turnKey, phaseLabel);
+        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
+      }
+  }
+
   function collect(
     obj: Record<string, unknown>,
     currentMatchId: string | null,
@@ -246,12 +434,6 @@ export function createBoardStateCollector(): BoardStateCollector {
     if (!gteEvent) return;
     const messages = gteEvent['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
     if (!messages) return;
-
-    // Combat continuation phases: MTGA sometimes advances turnNumber before these are logged,
-    // so we attribute them to the turn where BeginCombat was first seen.
-    const COMBAT_CONTINUATION = new Set([
-      'Step_DeclareAttack', 'Step_DeclareBlock', 'Step_CombatDamage', 'Step_EndCombat',
-    ]);
 
     for (const msg of messages) {
       if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
@@ -380,196 +562,12 @@ export function createBoardStateCollector(): BoardStateCollector {
         };
       }
 
-      // Process ZoneTransfer/Draw annotations to record which cards the local player drew.
+      // Process annotations and emit a board snapshot if the phase or turn changed.
       // Annotations are processed after game objects are merged so that newly revealed
-      // hand cards (added in the same message) can be looked up by instanceId.
-      const rawAnnotations = gsm['annotations'] as Array<Record<string, unknown>> | undefined;
-      if (rawAnnotations && state.turnInfo?.turnNumber !== undefined) {
-        const turnNum = state.turnInfo.turnNumber;
-        for (const ann of rawAnnotations) {
-          if (turnNum === 0) continue;
-          const annType = ann['type'];
-          const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
-            || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
-          if (!isZoneTransfer) continue;
-          const details = ann['details'] as Array<Record<string, unknown>> | undefined;
-          const categoryValue = details?.find((d) => d['key'] === 'category');
-          const category = Array.isArray(categoryValue?.['valueString'])
-            ? (categoryValue!['valueString'] as string[])[0]
-            : categoryValue?.['valueString'];
-          if (category !== 'Draw') continue;
+      // cards (added in the same message) can be looked up by instanceId.
+      processAnnotations({ gsm, state, currentMatchId, gameNumber, drawsByTurnKey });
 
-          const affectedIds = ann['affectedIds'];
-          if (!Array.isArray(affectedIds)) continue;
 
-          for (const affectedId of affectedIds) {
-            if (typeof affectedId !== 'number') continue;
-            const go = state.gameObjects.get(affectedId);
-            // Only track draws where the grpId is resolvable (local player's cards are visible)
-            if (!go?.grpId) continue;
-            // Confirm the card is owned by the local player (opponent hand is hidden)
-            if (go.ownerSeatId !== undefined && go.ownerSeatId !== state.localSeatId) continue;
-
-            const key = `${currentMatchId}:${gameNumber}:${turnNum}`;
-            if (!drawsByTurnKey.has(key)) {
-              drawsByTurnKey.set(key, { matchId: currentMatchId, gameNumber, turnNumber: turnNum, drawnGrpIds: [] });
-            }
-            drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
-          }
-        }
-      }
-
-      // Process action annotations (CastSpell, ActivateAbility, TriggerAbility) and their targets.
-      // Two-pass approach: Pass 1 collects action stubs from ZoneTransfer in annotations;
-      // Pass 2 attaches targets from AnnotationType_TargetSpec in persistentAnnotations.
-      //
-      // These two passes are separated because targeting data lives in persistentAnnotations
-      // (a different field from annotations) and may arrive in a different game state message
-      // than the ZoneTransfer that initiated the action.
-      //
-      // pendingActions is scoped per-turn (across messages) via pendingActionsPerGame declared
-      // outside the message loop. When the turn number changes, any prior turn's pending actions
-      // are flushed into actionsByGameKey first (they had no TargetSpec annotation — emit as-is).
-      const rawPersistentAnnotations = gsm['persistentAnnotations'] as Array<Record<string, unknown>> | undefined;
-      const hasTurnNum = state.turnInfo?.turnNumber !== undefined;
-      const turnNum = hasTurnNum ? state.turnInfo!.turnNumber : undefined;
-      if (hasTurnNum && turnNum !== undefined && turnNum !== 0 && (rawAnnotations || rawPersistentAnnotations)) {
-        const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
-        const gk = gameKey(currentMatchId, gameNumber);
-
-        // Initialise or retrieve the per-game pending-actions entry.
-        let gameEntry = pendingActionsPerGame.get(gk);
-        if (!gameEntry) {
-          gameEntry = { actions: new Map(), turn: turnNum };
-          pendingActionsPerGame.set(gk, gameEntry);
-        }
-
-        // Flush previous turn's unresolved actions when the turn advances.
-        if (gameEntry.turn !== turnNum) {
-          flushPendingActions(gk);
-          gameEntry.turn = turnNum;
-        }
-
-        const pendingActions = gameEntry.actions;
-
-        // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories.
-        if (rawAnnotations) {
-          for (const ann of rawAnnotations) {
-            const annType = ann['type'];
-            const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
-              || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
-            if (!isZoneTransfer) continue;
-
-            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
-            const categoryValue = details?.find((d) => d['key'] === 'category');
-            const category = Array.isArray(categoryValue?.['valueString'])
-              ? (categoryValue!['valueString'] as string[])[0]
-              : categoryValue?.['valueString'];
-            if (typeof category !== 'string' || !ACTION_CATEGORIES.has(category)) continue;
-
-            const affectedIds = ann['affectedIds'];
-            if (!Array.isArray(affectedIds) || affectedIds.length === 0) continue;
-
-            const sourceInstanceId = affectedIds[0];
-            if (typeof sourceInstanceId !== 'number') continue;
-
-            const go = state.gameObjects.get(sourceInstanceId);
-            // Skip if grpId is not resolvable
-            if (!go?.grpId) continue;
-
-            const castByMe = go.ownerSeatId === state.localSeatId || go.controllerSeatId === state.localSeatId;
-
-            pendingActions.set(sourceInstanceId, {
-              matchId: currentMatchId,
-              gameNumber,
-              turnNumber: turnNum,
-              type: category as 'CastSpell' | 'ActivateAbility' | 'TriggerAbility',
-              castByMe,
-              sourceGrpId: go.grpId,
-              sourceInstanceId,
-              targetInstanceIds: [],
-              targetGrpIds: [],
-            });
-          }
-        }
-
-        // Pass 2 — attach targets from AnnotationType_TargetSpec in persistentAnnotations.
-        // Targeting data lives in persistentAnnotations (not annotations), uses the type
-        // AnnotationType_TargetSpec, and identifies the source spell via the top-level
-        // affectorId field (not a details entry keyed by 'sourceId').
-        // These may reference actions added in a *previous* message (same turn), which is
-        // why pendingActions persists across messages within a turn (and across collect()
-        // calls at collector scope). A spell with multiple targets may have multiple entries
-        // in affectedIds; all of them accumulate onto the same action stub.
-        if (rawPersistentAnnotations) {
-          for (const ann of rawPersistentAnnotations) {
-            const annType = ann['type'];
-            const isTargetSpec =
-              annType === 'AnnotationType_TargetSpec' ||
-              (Array.isArray(annType) && annType.includes('AnnotationType_TargetSpec'));
-            if (!isTargetSpec) continue;
-
-            const affectorId = ann['affectorId'];
-            if (typeof affectorId !== 'number') continue;
-
-            const action = pendingActions.get(affectorId);
-            if (!action) continue;
-
-            const affectedIds = ann['affectedIds'];
-            if (!Array.isArray(affectedIds)) continue;
-
-            for (const targetInstanceId of affectedIds) {
-              if (typeof targetInstanceId !== 'number') continue;
-              action.targetInstanceIds.push(targetInstanceId);
-              const targetGo = state.gameObjects.get(targetInstanceId);
-              if (targetGo?.grpId) {
-                action.targetGrpIds.push(targetGo.grpId);
-              }
-            }
-          }
-        }
-      }
-
-      if (!state.turnInfo?.turnNumber) continue;
-
-      const currentTurn = state.turnInfo.turnNumber;
-      const turnKey = gameKey(currentMatchId, gameNumber);
-      const prevTurn = lastTurnNumbers.get(turnKey);
-      const phase = state.turnInfo.phase ?? 'Phase_Unknown';
-      // Use step name when available — steps are sub-phases within Phase_Begin (Untap/Upkeep/Draw)
-      // and combat (DeclareAttackers/DeclareBlockers/etc.). Comparing only phase misses these.
-      const step = state.turnInfo.step ?? '';
-      const phaseLabel = step || phase;
-      const prevPhase = lastPhases.get(turnKey);
-
-      // Track combat start so continuation phases can be attributed to the correct turn
-      // even when MTGA has already advanced turnNumber by the time it logs them.
-      if (phaseLabel === 'Step_BeginCombat') {
-        state.activeCombatTurn = currentTurn;
-        state.activeCombatPlayer = state.turnInfo.activePlayer;
-      }
-      const effectiveTurn = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
-        ? state.activeCombatTurn
-        : currentTurn;
-      const effectivePlayer = (state.activeCombatTurn !== null && COMBAT_CONTINUATION.has(phaseLabel))
-        ? state.activeCombatPlayer
-        : state.turnInfo.activePlayer;
-      if (phaseLabel === 'Step_EndCombat') {
-        state.activeCombatTurn = null;
-        state.activeCombatPlayer = undefined;
-      }
-
-      // Emit a snapshot immediately after each message's state updates are applied.
-      // This ensures each snapshot reflects the board state at that exact phase transition,
-      // rather than at the end of the batch (which may span multiple turns).
-      if (prevTurn !== currentTurn) {
-        lastTurnNumbers.set(turnKey, currentTurn);
-        lastPhases.set(turnKey, phaseLabel);
-        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
-      } else if (phaseLabel !== prevPhase) {
-        lastPhases.set(turnKey, phaseLabel);
-        tryEmit(currentMatchId, state, phaseLabel, effectiveTurn, effectivePlayer);
-      }
     }
 
   }

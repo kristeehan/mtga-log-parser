@@ -146,6 +146,14 @@ export interface ParseResult {
   debugBoardState: (matchId: string, gameNumber: number) => RawStateDebug | null;
 }
 
+export interface ProcessAnnotationsArgs {
+  gsm: Record<string, unknown>;
+  state: LiveGameState;
+  currentMatchId: string;
+  gameNumber: number;
+  drawsByTurnKey: Map<string, TurnDrawRecord>;
+}
+
 // === Collector interfaces ===
 
 export interface GameDataCollector {

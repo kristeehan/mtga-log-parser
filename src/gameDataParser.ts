@@ -1,8 +1,5 @@
 import type { GameSnapshot, GameDataCollector, SnapshotBuilder } from './types.js';
-
-function gameKey(matchId: string, gameNumber: number): string {
-  return `${matchId}:${gameNumber}`;
-}
+import { gameKey } from './utils.js';
 
 function parseEndReason(reason: string): GameSnapshot['gameEndReason'] {
   if (reason === 'ResultReason_Concede') return 'concede';

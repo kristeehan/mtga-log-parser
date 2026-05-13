@@ -1,9 +1,5 @@
 import { BoardCard, RawPlayer, RawGameObject, RawZone } from './types.js';
 
-export function gameKey(matchId: string, gameNumber: number): string {
-  return `${matchId}:${gameNumber}`;
-}
-
 export function toGameObject(raw: Record<string, unknown>): RawGameObject | null {
   const instanceId = raw['instanceId'];
   if (typeof instanceId !== 'number') return null;

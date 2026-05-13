@@ -56,7 +56,7 @@ Dependencies: imports `computeMatchResult` from `./utils.js`; imports `Match`, `
 
 ---
 
-## 3. Extract `src/rawGameObjects.ts` — JSON-to-struct mapping functions
+## ~~3. Extract `src/rawGameObjects.ts` — JSON-to-struct mapping functions~~ (Done)
 
 **Problem:** `boardStateParser.ts` opens with five mapping functions (`toGameObject`, `mergeGameObject`, `toZone`, `toPlayer`, `toBoardCard`) before getting to any snapshot or collector logic. These are mechanical raw-JSON-to-typed-struct transforms that share no logic with the snapshot builder or the event-routing code.
 
