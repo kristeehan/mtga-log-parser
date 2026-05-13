@@ -1,29 +1,29 @@
-import { BoardCard, RawPlayer, RawGameObject, RawZone } from './types.js';
+import type { BoardCard, RawPlayer, RawGameObject, RawZone } from './types.js';
 
 export function toGameObject(raw: Record<string, unknown>): RawGameObject | null {
-  const instanceId = raw['instanceId'];
+  const instanceId = raw.instanceId;
   if (typeof instanceId !== 'number') return null;
 
-  const grpId = typeof raw['grpId'] === 'number' ? raw['grpId'] : undefined;
-  const ownerSeatId = typeof raw['ownerSeatId'] === 'number' ? raw['ownerSeatId'] : undefined;
-  const controllerSeatId = typeof raw['controllerSeatId'] === 'number' ? raw['controllerSeatId'] : undefined;
-  const type = typeof raw['type'] === 'string' ? raw['type'] : undefined;
-  const power = typeof raw['power'] === 'number' ? raw['power'] : undefined;
-  const toughness = typeof raw['toughness'] === 'number' ? raw['toughness'] : undefined;
-  const zoneId = typeof raw['zoneId'] === 'number' ? raw['zoneId'] : undefined;
+  const grpId = typeof raw.grpId === 'number' ? raw.grpId : undefined;
+  const ownerSeatId = typeof raw.ownerSeatId === 'number' ? raw.ownerSeatId : undefined;
+  const controllerSeatId = typeof raw.controllerSeatId === 'number' ? raw.controllerSeatId : undefined;
+  const type = typeof raw.type === 'string' ? raw.type : undefined;
+  const power = typeof raw.power === 'number' ? raw.power : undefined;
+  const toughness = typeof raw.toughness === 'number' ? raw.toughness : undefined;
+  const zoneId = typeof raw.zoneId === 'number' ? raw.zoneId : undefined;
 
   // isTapped: check direct boolean field or status string
   let isTapped = false;
-  if (typeof raw['isTapped'] === 'boolean') {
-    isTapped = raw['isTapped'];
-  } else if (typeof raw['status'] === 'string') {
-    isTapped = raw['status'] === 'StatusType_Tapped';
+  if (typeof raw.isTapped === 'boolean') {
+    isTapped = raw.isTapped;
+  } else if (typeof raw.status === 'string') {
+    isTapped = raw.status === 'StatusType_Tapped';
   }
 
   // counters: object mapping counter type string to number
   let counters: Record<string, number> | undefined;
-  if (raw['counters'] && typeof raw['counters'] === 'object' && !Array.isArray(raw['counters'])) {
-    const rawCounters = raw['counters'] as Record<string, unknown>;
+  if (raw.counters && typeof raw.counters === 'object' && !Array.isArray(raw.counters)) {
+    const rawCounters = raw.counters as Record<string, unknown>;
     const built: Record<string, number> = {};
     for (const [k, v] of Object.entries(rawCounters)) {
       if (typeof v === 'number') built[k] = v;
@@ -59,13 +59,13 @@ export function mergeGameObject(
 }
 
 export function toZone(raw: Record<string, unknown>): RawZone | null {
-  const zoneId = raw['zoneId'];
+  const zoneId = raw.zoneId;
   if (typeof zoneId !== 'number') return null;
 
-  const type = typeof raw['type'] === 'string' ? raw['type'] : undefined;
-  const ownerSeatId = typeof raw['ownerSeatId'] === 'number' ? raw['ownerSeatId'] : undefined;
-  const objectInstanceIds = Array.isArray(raw['objectInstanceIds'])
-    ? (raw['objectInstanceIds'] as unknown[]).filter((x): x is number => typeof x === 'number')
+  const type = typeof raw.type === 'string' ? raw.type : undefined;
+  const ownerSeatId = typeof raw.ownerSeatId === 'number' ? raw.ownerSeatId : undefined;
+  const objectInstanceIds = Array.isArray(raw.objectInstanceIds)
+    ? (raw.objectInstanceIds as unknown[]).filter((x): x is number => typeof x === 'number')
     : undefined;
 
   return { zoneId, type, ownerSeatId, objectInstanceIds };
@@ -73,9 +73,9 @@ export function toZone(raw: Record<string, unknown>): RawZone | null {
 
 export function toPlayer(raw: Record<string, unknown>): RawPlayer {
   return {
-    systemSeatNumber: typeof raw['systemSeatNumber'] === 'number' ? raw['systemSeatNumber'] : undefined,
-    lifeTotal: typeof raw['lifeTotal'] === 'number' ? raw['lifeTotal'] : undefined,
-    turnNumber: typeof raw['turnNumber'] === 'number' ? raw['turnNumber'] : undefined,
+    systemSeatNumber: typeof raw.systemSeatNumber === 'number' ? raw.systemSeatNumber : undefined,
+    lifeTotal: typeof raw.lifeTotal === 'number' ? raw.lifeTotal : undefined,
+    turnNumber: typeof raw.turnNumber === 'number' ? raw.turnNumber : undefined,
   };
 }
 

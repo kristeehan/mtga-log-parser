@@ -10,6 +10,7 @@ import type {
   BoardStateCollector,
   CollectorState,
   ProcessAnnotationsArgs,
+  ParseStats,
 } from './types.js';
 import { toBoardCard, toGameObject, mergeGameObject, toZone, toPlayer } from './rawGameObjects.js';
 import { gameKey } from './utils.js';
@@ -47,7 +48,7 @@ function buildSnapshot(
     cardTypeFilter: boolean,
   ): Generator<BoardCard> {
     for (const obj of objects) {
-      if (!obj || !obj.grpId) continue;
+      if (!obj?.grpId) continue;
       if (seen.has(obj.instanceId)) continue;
 
       if (cardTypeFilter) {
@@ -136,7 +137,7 @@ function buildSnapshot(
     if (zone.type !== 'ZoneType_Stack') continue;
     for (const instanceId of zone.objectInstanceIds ?? []) {
       const obj = gameObjects.get(instanceId);
-      if (!obj || !obj.grpId) continue;
+      if (!obj?.grpId) continue;
       stack.push(toBoardCard(obj));
     }
   }
@@ -198,7 +199,7 @@ export function createBoardStateCollector(): BoardStateCollector {
     if (!entry || entry.actions.size === 0) return;
     if (!actionsByGameKey.has(gk)) actionsByGameKey.set(gk, []);
     for (const action of entry.actions.values()) {
-      actionsByGameKey.get(gk)!.push(action);
+      actionsByGameKey.get(gk)?.push(action);
     }
     entry.actions.clear();
   }
@@ -239,7 +240,7 @@ export function createBoardStateCollector(): BoardStateCollector {
   }
 
   function processAnnotations(obj: ProcessAnnotationsArgs): void {
-    const { gsm, state, currentMatchId, gameNumber, drawsByTurnKey } = obj;
+    const { gsm, state, currentMatchId, gameNumber, drawsByTurnKey, stats } = obj;
 
     // Combat continuation phases: MTGA sometimes advances turnNumber before these are logged,
     // so we attribute them to the turn where BeginCombat was first seen.
@@ -247,23 +248,23 @@ export function createBoardStateCollector(): BoardStateCollector {
       'Step_DeclareAttack', 'Step_DeclareBlock', 'Step_CombatDamage', 'Step_EndCombat',
     ]);
 
-    const rawAnnotations = gsm['annotations'] as Array<Record<string, unknown>> | undefined;
+    const rawAnnotations = gsm.annotations as Array<Record<string, unknown>> | undefined;
     if (rawAnnotations && state.turnInfo?.turnNumber !== undefined) {
       const turnNum = state.turnInfo.turnNumber;
       for (const ann of rawAnnotations) {
         if (turnNum === 0) continue;
-        const annType = ann['type'];
+        const annType = ann.type;
         const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
           || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
         if (!isZoneTransfer) continue;
-        const details = ann['details'] as Array<Record<string, unknown>> | undefined;
-        const categoryValue = details?.find((d) => d['key'] === 'category');
-        const category = Array.isArray(categoryValue?.['valueString'])
-          ? (categoryValue!['valueString'] as string[])[0]
-          : categoryValue?.['valueString'];
+        const details = ann.details as Array<Record<string, unknown>> | undefined;
+        const categoryValue = details?.find((d) => d.key === 'category');
+        const category = Array.isArray(categoryValue?.valueString)
+          ? (categoryValue?.valueString as string[])[0]
+          : categoryValue?.valueString;
         if (category !== 'Draw') continue;
 
-        const affectedIds = ann['affectedIds'];
+        const affectedIds = ann.affectedIds;
         if (!Array.isArray(affectedIds)) continue;
 
         for (const affectedId of affectedIds) {
@@ -278,13 +279,13 @@ export function createBoardStateCollector(): BoardStateCollector {
           if (!drawsByTurnKey.has(key)) {
             drawsByTurnKey.set(key, { matchId: currentMatchId, gameNumber, turnNumber: turnNum, drawnGrpIds: [] });
           }
-          drawsByTurnKey.get(key)!.drawnGrpIds.push(go.grpId);
+          drawsByTurnKey.get(key)?.drawnGrpIds.push(go.grpId);
         }
       }
     }
-    const rawPersistentAnnotations = gsm['persistentAnnotations'] as Array<Record<string, unknown>> | undefined;
+    const rawPersistentAnnotations = gsm.persistentAnnotations as Array<Record<string, unknown>> | undefined;
     const hasTurnNum = state.turnInfo?.turnNumber !== undefined;
-    const turnNum = hasTurnNum ? state.turnInfo!.turnNumber : undefined;
+    const turnNum = hasTurnNum ? state.turnInfo?.turnNumber : undefined;
       if (hasTurnNum && turnNum !== undefined && turnNum !== 0 && (rawAnnotations || rawPersistentAnnotations)) {
         const ACTION_CATEGORIES = new Set(['CastSpell', 'ActivateAbility', 'TriggerAbility']);
         const gk = gameKey(currentMatchId, gameNumber);
@@ -307,19 +308,19 @@ export function createBoardStateCollector(): BoardStateCollector {
         // Pass 1 — collect action stubs from ZoneTransfer annotations with action categories.
         if (rawAnnotations) {
           for (const ann of rawAnnotations) {
-            const annType = ann['type'];
+            const annType = ann.type;
             const isZoneTransfer = annType === 'AnnotationType_ZoneTransfer'
               || (Array.isArray(annType) && annType.includes('AnnotationType_ZoneTransfer'));
             if (!isZoneTransfer) continue;
 
-            const details = ann['details'] as Array<Record<string, unknown>> | undefined;
-            const categoryValue = details?.find((d) => d['key'] === 'category');
-            const category = Array.isArray(categoryValue?.['valueString'])
-              ? (categoryValue!['valueString'] as string[])[0]
-              : categoryValue?.['valueString'];
+            const details = ann.details as Array<Record<string, unknown>> | undefined;
+            const categoryValue = details?.find((d) => d.key === 'category');
+            const category = Array.isArray(categoryValue?.valueString)
+              ? (categoryValue?.valueString as string[])[0]
+              : categoryValue?.valueString;
             if (typeof category !== 'string' || !ACTION_CATEGORIES.has(category)) continue;
 
-            const affectedIds = ann['affectedIds'];
+            const affectedIds = ann.affectedIds;
             if (!Array.isArray(affectedIds) || affectedIds.length === 0) continue;
 
             const sourceInstanceId = affectedIds[0];
@@ -327,7 +328,10 @@ export function createBoardStateCollector(): BoardStateCollector {
 
             const go = state.gameObjects.get(sourceInstanceId);
             // Skip if grpId is not resolvable
-            if (!go?.grpId) continue;
+            if (!go?.grpId) {
+              stats.droppedActions.unresolvableGrpId++;
+              continue;
+            }
 
             const castByMe = go.ownerSeatId === state.localSeatId || go.controllerSeatId === state.localSeatId;
 
@@ -355,19 +359,22 @@ export function createBoardStateCollector(): BoardStateCollector {
         // in affectedIds; all of them accumulate onto the same action stub.
         if (rawPersistentAnnotations) {
           for (const ann of rawPersistentAnnotations) {
-            const annType = ann['type'];
+            const annType = ann.type;
             const isTargetSpec =
               annType === 'AnnotationType_TargetSpec' ||
               (Array.isArray(annType) && annType.includes('AnnotationType_TargetSpec'));
             if (!isTargetSpec) continue;
 
-            const affectorId = ann['affectorId'];
+            const affectorId = ann.affectorId;
             if (typeof affectorId !== 'number') continue;
 
             const action = pendingActions.get(affectorId);
-            if (!action) continue;
+            if (!action) {
+              stats.droppedActions.orphanTarget++;
+              continue;
+            }
 
-            const affectedIds = ann['affectedIds'];
+            const affectedIds = ann.affectedIds;
             if (!Array.isArray(affectedIds)) continue;
 
             for (const targetInstanceId of affectedIds) {
@@ -427,26 +434,34 @@ export function createBoardStateCollector(): BoardStateCollector {
   function collect(
     obj: Record<string, unknown>,
     currentMatchId: string | null,
+    stats?: ParseStats,
   ): void {
+    const effectiveStats = stats ?? {
+      filesScanned: 0, linesScanned: 0,
+      candidateLines: { deck: 0, matchState: 0, gre: 0 },
+      parseErrors: { deck: 0, matchState: 0, gre: 0 },
+      matchesStarted: 0, matchesCompleted: 0,
+      droppedActions: { unresolvableGrpId: 0, orphanTarget: 0 },
+    } as ParseStats;
     if (!currentMatchId) return;
 
-    const gteEvent = obj['greToClientEvent'] as Record<string, unknown> | undefined;
+    const gteEvent = obj.greToClientEvent as Record<string, unknown> | undefined;
     if (!gteEvent) return;
-    const messages = gteEvent['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
+    const messages = gteEvent.greToClientMessages as Array<Record<string, unknown>> | undefined;
     if (!messages) return;
 
     for (const msg of messages) {
-      if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
+      if (msg.type !== 'GREMessageType_GameStateMessage') continue;
 
       // Local seat from systemSeatIds[0]; persist across messages that omit it
-      const seatIds = msg['systemSeatIds'] as number[] | undefined;
+      const seatIds = msg.systemSeatIds as number[] | undefined;
       const msgLocalSeatId = typeof seatIds?.[0] === 'number' ? seatIds[0] : undefined;
 
-      const gsm = msg['gameStateMessage'] as Record<string, unknown> | undefined;
+      const gsm = msg.gameStateMessage as Record<string, unknown> | undefined;
       if (!gsm) continue;
 
-      const gameInfo = gsm['gameInfo'] as Record<string, unknown> | undefined;
-      const gameNumberRaw = gameInfo?.['gameNumber'];
+      const gameInfo = gsm.gameInfo as Record<string, unknown> | undefined;
+      const gameNumberRaw = gameInfo?.gameNumber;
       if (typeof gameNumberRaw === 'number') {
         currentGameNumbers.set(currentMatchId, gameNumberRaw);
       }
@@ -461,17 +476,17 @@ export function createBoardStateCollector(): BoardStateCollector {
       if (msgLocalSeatId !== undefined) state.localSeatId = msgLocalSeatId;
       if (state.localSeatId === null) continue; // skip until we've seen a seatId
 
-      const gameStateType = typeof gsm['type'] === 'string' ? gsm['type'] : undefined;
+      const gameStateType = typeof gsm.type === 'string' ? gsm.type : undefined;
       const isFullState = gameStateType === 'GameStateType_Full';
 
-      const rawGameObjects = gsm['gameObjects'] as Array<Record<string, unknown>> | undefined;
+      const rawGameObjects = gsm.gameObjects as Array<Record<string, unknown>> | undefined;
       if (rawGameObjects) {
         if (isFullState) {
           // Full state: authoritative list — remove any objects absent from the message
           // (e.g. cards returned to library during a mulligan).
           const liveIds = new Set<number>();
           for (const raw of rawGameObjects) {
-            const id = raw['instanceId'];
+            const id = raw.instanceId;
             if (typeof id === 'number') liveIds.add(id);
           }
           for (const existingId of state.gameObjects.keys()) {
@@ -501,12 +516,12 @@ export function createBoardStateCollector(): BoardStateCollector {
       // Merge zones — same principle: preserve objectInstanceIds if not in the delta.
       // On full state: remove zones absent from the message (same as game objects) to prevent
       // stale empty graveyard/hand zones from persisting across games or mulligans.
-      const rawZones = gsm['zones'] as Array<Record<string, unknown>> | undefined;
+      const rawZones = gsm.zones as Array<Record<string, unknown>> | undefined;
       if (rawZones) {
         if (isFullState) {
           const liveZoneIds = new Set<number>();
           for (const raw of rawZones) {
-            const id = raw['zoneId'];
+            const id = raw.zoneId;
             if (typeof id === 'number') liveZoneIds.add(id);
           }
           for (const existingZoneId of state.zones.keys()) {
@@ -535,7 +550,7 @@ export function createBoardStateCollector(): BoardStateCollector {
       }
 
       // Merge players
-      const rawPlayers = gsm['players'] as Array<Record<string, unknown>> | undefined;
+      const rawPlayers = gsm.players as Array<Record<string, unknown>> | undefined;
       if (rawPlayers) {
         for (const raw of rawPlayers) {
           const player = toPlayer(raw);
@@ -546,17 +561,17 @@ export function createBoardStateCollector(): BoardStateCollector {
       }
 
       // Merge turnInfo
-      const rawTurnInfo = gsm['turnInfo'] as Record<string, unknown> | undefined;
+      const rawTurnInfo = gsm.turnInfo as Record<string, unknown> | undefined;
       if (rawTurnInfo) {
-        const incomingPhase = typeof rawTurnInfo['phase'] === 'string' ? rawTurnInfo['phase'] : undefined;
-        const incomingStep = typeof rawTurnInfo['step'] === 'string' ? rawTurnInfo['step'] : undefined;
+        const incomingPhase = typeof rawTurnInfo.phase === 'string' ? rawTurnInfo.phase : undefined;
+        const incomingStep = typeof rawTurnInfo.step === 'string' ? rawTurnInfo.step : undefined;
         // Step is only meaningful within its parent phase. When phase changes and the new
         // message omits step, clear it — otherwise the old step pollutes the phaseLabel for
         // the new phase, causing Phase_Main (no step) to be silently skipped.
         const phaseChanged = incomingPhase !== undefined && incomingPhase !== state.turnInfo?.phase;
         state.turnInfo = {
-          turnNumber: typeof rawTurnInfo['turnNumber'] === 'number' ? rawTurnInfo['turnNumber'] : state.turnInfo?.turnNumber,
-          activePlayer: typeof rawTurnInfo['activePlayer'] === 'number' ? rawTurnInfo['activePlayer'] : state.turnInfo?.activePlayer,
+          turnNumber: typeof rawTurnInfo.turnNumber === 'number' ? rawTurnInfo.turnNumber : state.turnInfo?.turnNumber,
+          activePlayer: typeof rawTurnInfo.activePlayer === 'number' ? rawTurnInfo.activePlayer : state.turnInfo?.activePlayer,
           phase: incomingPhase ?? state.turnInfo?.phase,
           step: incomingStep ?? (phaseChanged ? '' : state.turnInfo?.step),
         };
@@ -565,7 +580,7 @@ export function createBoardStateCollector(): BoardStateCollector {
       // Process annotations and emit a board snapshot if the phase or turn changed.
       // Annotations are processed after game objects are merged so that newly revealed
       // cards (added in the same message) can be looked up by instanceId.
-      processAnnotations({ gsm, state, currentMatchId, gameNumber, drawsByTurnKey });
+      processAnnotations({ gsm, state, currentMatchId, gameNumber, drawsByTurnKey, stats: effectiveStats });
 
 
     }

@@ -26,6 +26,7 @@ export type {
   // Parse API types
   ParseConfig,
   ParseResult,
+  ParseStats,
   // Collector interfaces
   GameDataCollector,
   BoardStateCollector,
