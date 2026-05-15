@@ -282,6 +282,35 @@ export function createBoardStateCollector(): BoardStateCollector {
         }
       }
     }
+    // TappedUntappedPermanent is the authoritative tap-state signal.
+    // For untap events MTGA omits isTapped from the diff game object entirely,
+    // so mergeGameObject's preserve-on-absent logic keeps the stale tapped state.
+    // The annotation is the only reliable way to detect untap.
+    if (rawAnnotations) {
+      for (const ann of rawAnnotations) {
+        const annType = ann['type'];
+        const isTapAnn =
+          annType === 'AnnotationType_TappedUntappedPermanent' ||
+          (Array.isArray(annType) && annType.includes('AnnotationType_TappedUntappedPermanent'));
+        if (!isTapAnn) continue;
+
+        const details = ann['details'] as Array<Record<string, unknown>> | undefined;
+        const tappedEntry = details?.find((d) => d['key'] === 'tapped');
+        const tappedArr = tappedEntry?.['valueInt32'];
+        const tappedVal = Array.isArray(tappedArr) ? tappedArr[0] : undefined;
+        if (tappedVal !== 0 && tappedVal !== 1) continue;
+
+        const affectedIds = ann['affectedIds'];
+        if (!Array.isArray(affectedIds)) continue;
+
+        for (const id of affectedIds) {
+          if (typeof id !== 'number') continue;
+          const go = state.gameObjects.get(id);
+          if (go) state.gameObjects.set(id, { ...go, isTapped: tappedVal === 1 });
+        }
+      }
+    }
+
     const rawPersistentAnnotations = gsm['persistentAnnotations'] as Array<Record<string, unknown>> | undefined;
     const hasTurnNum = state.turnInfo?.turnNumber !== undefined;
     const turnNum = hasTurnNum ? state.turnInfo!.turnNumber : undefined;
