@@ -12,38 +12,38 @@ export function handleMatchStart(
   deckByEvent: Map<string, { name: string; deck: DeckList }>,
   matchFilter: (eventId: string) => boolean,
 ): void {
-  const config = gameRoomInfo['gameRoomConfig'] as Record<string, unknown> | undefined;
+  const config = gameRoomInfo.gameRoomConfig as Record<string, unknown> | undefined;
   if (!config) return;
 
-  const matchId = config['matchId'] as string | undefined;
+  const matchId = config.matchId as string | undefined;
   if (!matchId) return;
 
-  const players = config['reservedPlayers'] as Array<Record<string, unknown>> | undefined;
+  const players = config.reservedPlayers as Array<Record<string, unknown>> | undefined;
   if (!players || players.length < 2) return;
 
   const allPass = players.every((p) => {
-    const eventId = p['eventId'];
+    const eventId = p.eventId;
     return typeof eventId === 'string' && matchFilter(eventId);
   });
   if (!allPass) return;
 
   // Local player: Mac platform → systemSeatId 1 → players[0]
-  let localPlayer = players.find((p) => p['platformId'] === 'Mac');
-  if (!localPlayer) localPlayer = players.find((p) => p['systemSeatId'] === 1);
+  let localPlayer = players.find((p) => p.platformId === 'Mac');
+  if (!localPlayer) localPlayer = players.find((p) => p.systemSeatId === 1);
   if (!localPlayer) localPlayer = players[0];
 
-  const opponent = players.find((p) => p['userId'] !== localPlayer!['userId']);
+  const opponent = players.find((p) => p.userId !== localPlayer?.userId);
   if (!opponent) return;
 
-  const localTeamId = localPlayer['teamId'];
+  const localTeamId = localPlayer.teamId;
   if (typeof localTeamId !== 'number') return;
   localTeamIdMap.set(matchId, localTeamId);
 
   const timestamp =
-    typeof obj['timestamp'] === 'string' ? parseInt(obj['timestamp'], 10) : Date.now();
+    typeof obj.timestamp === 'string' ? parseInt(obj.timestamp, 10) : Date.now();
 
   // Derive a friendly event label from the first player's eventId
-  const rawEventId = players[0]?.['eventId'] as string | undefined ?? '';
+  const rawEventId = players[0]?.eventId as string | undefined ?? '';
   const eventLabel = rawEventId === 'Traditional_Ladder' ? 'Ranked'
     : rawEventId.startsWith('Traditional_') ? rawEventId.replace(/^Traditional_/, '').replace(/_/g, ' ')
     : rawEventId === 'Constructed_BestOf3' ? 'Bo3 Play'
@@ -63,8 +63,8 @@ export function handleMatchStart(
   matchMap.set(matchId, {
     id: matchId,
     timestamp,
-    opponent: (opponent['playerName'] as string) ?? 'Unknown',
-    opponentPlatform: (opponent['platformId'] as string) ?? '',
+    opponent: (opponent.playerName as string) ?? 'Unknown',
+    opponentPlatform: (opponent.platformId as string) ?? '',
     opponentDeck: '',
     opponentColors: '',
     myDeck: resolvedDeckName,
@@ -85,10 +85,10 @@ export function handleMatchEnd(
   localTeamIdMap: Map<string, number>,
   gameEndReasonsMap: Map<string, string[]>,
 ): void {
-  const finalResult = gameRoomInfo['finalMatchResult'] as Record<string, unknown> | undefined;
+  const finalResult = gameRoomInfo.finalMatchResult as Record<string, unknown> | undefined;
   if (!finalResult) return;
 
-  const matchId = finalResult['matchId'] as string | undefined;
+  const matchId = finalResult.matchId as string | undefined;
   if (!matchId) return;
 
   const existing = matchMap.get(matchId);
@@ -98,14 +98,14 @@ export function handleMatchEnd(
   const localTeamId = localTeamIdMap.get(matchId);
   if (localTeamId === undefined) return;
 
-  const resultList = finalResult['resultList'] as Array<Record<string, unknown>> | undefined;
+  const resultList = finalResult.resultList as Array<Record<string, unknown>> | undefined;
   if (!resultList) return;
 
   const gameResults: RawGameResult[] = resultList
-    .filter((r) => r['scope'] === 'MatchScope_Game')
+    .filter((r) => r.scope === 'MatchScope_Game')
     .flatMap((r) => {
-      const winningTeamId = r['winningTeamId'];
-      const reason = r['reason'];
+      const winningTeamId = r.winningTeamId;
+      const reason = r.reason;
       if (typeof winningTeamId !== 'number' || typeof reason !== 'string') return [];
       return [{ winningTeamId, reason }];
     });
@@ -129,8 +129,8 @@ export function handleMatchEnd(
   // out or forfeits mid-series — MTGA awards the match without playing a decisive game).
   let matchResult = computeMatchResult(g1, g2, g3);
   if (matchResult === null) {
-    const matchScopeEntry = resultList.find((r) => r['scope'] === 'MatchScope_Match');
-    const matchWinningTeamId = matchScopeEntry?.['winningTeamId'];
+    const matchScopeEntry = resultList.find((r) => r.scope === 'MatchScope_Match');
+    const matchWinningTeamId = matchScopeEntry?.winningTeamId;
     if (typeof matchWinningTeamId === 'number') {
       matchResult = matchWinningTeamId === localTeamId ? 'Win' : 'Loss';
     }
@@ -157,46 +157,46 @@ export function tryExtractGameState(
   const existing = matchMap.get(currentMatchId);
   if (!existing) return;
 
-  const gteEvent = obj['greToClientEvent'] as Record<string, unknown> | undefined;
+  const gteEvent = obj.greToClientEvent as Record<string, unknown> | undefined;
   if (!gteEvent) return;
 
-  const messages = gteEvent['greToClientMessages'] as Array<Record<string, unknown>> | undefined;
+  const messages = gteEvent.greToClientMessages as Array<Record<string, unknown>> | undefined;
   if (!messages) return;
 
   for (const msg of messages) {
-    if (msg['type'] !== 'GREMessageType_GameStateMessage') continue;
+    if (msg.type !== 'GREMessageType_GameStateMessage') continue;
 
-    const seatIds = msg['systemSeatIds'] as number[] | undefined;
+    const seatIds = msg.systemSeatIds as number[] | undefined;
     const localSeatId = seatIds?.[0];
     if (typeof localSeatId !== 'number') continue;
 
-    const gsm = msg['gameStateMessage'] as Record<string, unknown> | undefined;
+    const gsm = msg.gameStateMessage as Record<string, unknown> | undefined;
     if (!gsm) continue;
 
     // Collect opponent grpIds from game objects (battlefield, graveyard = visible)
-    const gameObjects = gsm['gameObjects'] as Array<Record<string, unknown>> | undefined;
+    const gameObjects = gsm.gameObjects as Array<Record<string, unknown>> | undefined;
     if (gameObjects) {
       if (!opponentGrpIds.has(currentMatchId)) opponentGrpIds.set(currentMatchId, new Set());
       const grpSet = opponentGrpIds.get(currentMatchId)!;
       for (const go of gameObjects) {
-        const owner = go['ownerSeatId'];
-        const grp = go['grpId'];
+        const owner = go.ownerSeatId;
+        const grp = go.grpId;
         // Only opponent-owned, real card grpIds (> 100 to skip special token IDs)
-        if (typeof owner === 'number' && owner !== localSeatId && typeof grp === 'number' && grp > 100 && go['type'] === 'GameObjectType_Card') {
+        if (typeof owner === 'number' && owner !== localSeatId && typeof grp === 'number' && grp > 100 && go.type === 'GameObjectType_Card') {
           grpSet.add(grp);
         }
       }
     }
 
     // Play/draw detection: game 1, turn 1 only
-    const gameInfo = gsm['gameInfo'] as Record<string, unknown> | undefined;
-    if (gameInfo?.['gameNumber'] !== 1) continue;
+    const gameInfo = gsm.gameInfo as Record<string, unknown> | undefined;
+    if (gameInfo?.gameNumber !== 1) continue;
 
-    const turnInfo = gsm['turnInfo'] as Record<string, unknown> | undefined;
+    const turnInfo = gsm.turnInfo as Record<string, unknown> | undefined;
     if (!turnInfo) continue;
 
-    const turnNumber = turnInfo['turnNumber'];
-    const activePlayer = turnInfo['activePlayer'];
+    const turnNumber = turnInfo.turnNumber;
+    const activePlayer = turnInfo.activePlayer;
     if (typeof turnNumber !== 'number' || turnNumber !== 1) continue;
     if (typeof activePlayer !== 'number') continue;
 

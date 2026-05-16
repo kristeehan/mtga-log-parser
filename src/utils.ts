@@ -31,20 +31,21 @@ export function parseLogDate(filename: string): number {
   return new Date(`${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}Z`).getTime();
 }
 
-export function tryParseJSON(line: string): unknown {
+export function tryParseJSON(line: string, onError?: () => void): unknown {
   const start = line.indexOf('{');
   if (start === -1) return null;
   try {
     return JSON.parse(line.slice(start));
   } catch {
+    onError?.();
     return null;
   }
 }
 
 export function toEntries(arr: Array<Record<string, unknown>> | undefined): CardEntry[] {
   return (arr ?? []).flatMap((card) => {
-    const cardId = card['cardId'];
-    const quantity = card['quantity'];
+    const cardId = card.cardId;
+    const quantity = card.quantity;
     if (typeof cardId !== 'number' || typeof quantity !== 'number') return [];
     return [{ cardId, quantity }];
   });

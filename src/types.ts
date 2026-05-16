@@ -106,6 +106,18 @@ export interface DeckList {
   sideboard: CardEntry[];
 }
 
+// === Parse stats ===
+
+export interface ParseStats {
+  filesScanned: number;
+  linesScanned: number;
+  candidateLines: { deck: number; matchState: number; gre: number };
+  parseErrors:   { deck: number; matchState: number; gre: number };
+  matchesStarted: number;
+  matchesCompleted: number;
+  droppedActions: { unresolvableGrpId: number; orphanTarget: number };
+}
+
 // === Parse API types ===
 
 export interface ParseConfig {
@@ -144,6 +156,8 @@ export interface ParseResult {
   deckUsages: Map<string, { deck: DeckList; timestamp: number }>;
   /** Returns raw accumulated zone/object state for a match+game — useful for diagnosing unexpected board snapshots. */
   debugBoardState: (matchId: string, gameNumber: number) => RawStateDebug | null;
+  /** Aggregate counters from the parse run. */
+  stats: ParseStats;
 }
 
 export interface ProcessAnnotationsArgs {
@@ -152,6 +166,7 @@ export interface ProcessAnnotationsArgs {
   currentMatchId: string;
   gameNumber: number;
   drawsByTurnKey: Map<string, TurnDrawRecord>;
+  stats: ParseStats;
 }
 
 // === Collector interfaces ===
@@ -178,6 +193,7 @@ export interface BoardStateCollector {
   collect(
     obj: Record<string, unknown>,
     currentMatchId: string | null,
+    stats?: ParseStats,
   ): void;
   snapshots(): TurnSnapshot[];
   drawRecords(): TurnDrawRecord[];
@@ -282,9 +298,9 @@ export interface RawGameResult {
 }
 
 export interface ParseSession {
-  lines: string[];
   session: Session;
   gameDataCollector: GameDataCollector;
   boardStateCollector: BoardStateCollector;
   matchFilter: MatchFilter;
+  stats: ParseStats;
 }
