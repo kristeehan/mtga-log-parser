@@ -128,6 +128,7 @@ result.gameSnapshots;     // GameSnapshot[] — one per game (life totals, mulli
 result.boardSnapshots;    // TurnSnapshot[] — per-phase board state for every turn
 result.turnDrawRecords;   // TurnDrawRecord[] — grpIds drawn by local player per turn
 result.gameActions;       // GameAction[] — every spell cast and ability used, with targeting
+result.stats;             // ParseStats — aggregate parse counters (lines scanned, errors, dropped actions)
 result.myDeckListMap;     // Map<matchId, DeckList> — grpId card lists
 result.deckUsages;        // Map<deckName, { deck, timestamp }> — most recent list per deck name
 result.opponentGrpIds;    // Map<matchId, Set<number>> — raw grpIds seen on opponent cards
@@ -172,6 +173,39 @@ const game1Actions = result.gameActions.filter(
 - `targetGrpIds` may be empty even when targets exist if the target is a face-down or otherwise hidden object.
 - `targetInstanceIds` always contains the raw instance IDs from the log regardless of visibility.
 
+## Parse diagnostics (`ParseStats`)
+
+`result.stats` gives you a window into what the parser saw and dropped — useful for diagnosing missing matches or verifying that MTGA hasn't renamed a log sentinel.
+
+```ts
+const result = await parseAllLogsWithDebug({ logDir: '...' });
+console.log(result.stats);
+// {
+//   filesScanned: 12,
+//   linesScanned: 847234,
+//   candidateLines: { deck: 4, matchState: 84, gre: 16503 },
+//   parseErrors:    { deck: 0, matchState: 0, gre: 0 },
+//   matchesStarted: 42,
+//   matchesCompleted: 42,
+//   droppedActions: { unresolvableGrpId: 7, orphanTarget: 0 },
+// }
+```
+
+| Field | Description |
+|---|---|
+| `filesScanned` | Number of `UTC_Log - *.log` files read |
+| `linesScanned` | Total lines processed across all files |
+| `candidateLines.deck` | Lines containing `EventSetDeckV2`/`CourseDeckSummary` |
+| `candidateLines.matchState` | Lines containing `matchGameRoomStateChangedEvent` |
+| `candidateLines.gre` | Lines containing `greToClientEvent` |
+| `parseErrors.deck` / `.matchState` / `.gre` | JSON parse failures per category — non-zero means MTGA changed a log format |
+| `matchesStarted` | Matches that passed `matchFilter` and began processing |
+| `matchesCompleted` | Matches that reached a `MatchCompleted` state |
+| `droppedActions.unresolvableGrpId` | Actions skipped because the source card was hidden (opponent hand) |
+| `droppedActions.orphanTarget` | Targeting annotations that had no matching action stub |
+
+If `candidateLines.deck` is 0, `matchFilter` may be filtering everything or MTGA renamed the deck sentinel. If `matchesStarted ≠ matchesCompleted`, some matches ended abnormally (crash, disconnect) and were excluded.
+
 ## `ParseConfig` reference
 
 | Field | Type | Required | Description |
@@ -179,6 +213,10 @@ const game1Actions = result.gameActions.filter(
 | `logDir` | `string` | Yes | Directory containing `UTC_Log - *.log` files |
 | `matchFilter` | `(eventId: string) => boolean` | No | Predicate to restrict which matches are included. Defaults to `MatchFilters.all`. Use `MatchFilters.bo3Constructed` to replicate pre-2.0 behavior. |
 | `resolveColors` | `(grpIds: number[]) => Promise<string>` | No | Async callback to derive opponent color string (e.g. `"WU"`) from card grpIds. If omitted, `match.opponentColors` will be `""`. |
+
+## Migrating from 4.x
+
+Version 4.1 is additive — no existing fields were removed or renamed. Two new fields appear on `ParseResult`: `stats: ParseStats` and (already in 4.0) `gameActions: GameAction[]`. Existing code continues to work without modification.
 
 ## Migrating from 3.x
 
